@@ -66,7 +66,7 @@ int lastState = LOW;  // the previous state from the input pin
 int currentState;     // the current reading from the input pin
 
 
-void setup(){
+void setup() {
   startMozzi(CONTROL_RATE); // :)
   Serial.begin(9600);
   redSin.setFreq(523); // set the frequency
@@ -79,19 +79,21 @@ void setup(){
   violetSin.setFreq(1046); // set the frequency
 
   pinMode(BUTTON_PIN, INPUT_PULLUP);
-  
+
   as7341.setLEDCurrent(50); // 4mA
   as7341.enableLED(true);
   sensorTimeLast = millis();
   sensorTimeNow = millis();
 
-    while (!Serial) {
+  while (!Serial) {
     delay(1);
   }
-  
-  if (!as7341.begin()){
+
+  if (!as7341.begin()) {
     Serial.println("Could not find AS7341");
-    while (1) { delay(10); }
+    while (1) {
+      delay(10);
+    }
   }
 
   as7341.setATIME(100);
@@ -102,19 +104,19 @@ void setup(){
 
 
 
-void updateControl(){
-currentState = digitalRead(BUTTON_PIN);
-  
+void updateControl() {
+  currentState = digitalRead(BUTTON_PIN);
+
   //sensorTimeNow = millis();
-if (lastState == HIGH && currentState == LOW){
-  readSensor();
-  //sensorTimeLast = millis();
-//  Serial.print("volume = ");Serial.println(volume);
-  //Serial.print("redValue = ");Serial.println(redValue);
-  //Serial.print("greenValue = ");Serial.println(greenValue);
-  Serial.println(currentState);
-  
-}
+  if (lastState == HIGH && currentState == LOW) {
+    readSensor();
+    //sensorTimeLast = millis();
+    //  Serial.print("volume = ");Serial.println(volume);
+    //Serial.print("redValue = ");Serial.println(redValue);
+    //Serial.print("greenValue = ");Serial.println(greenValue);
+    Serial.println(currentState);
+
+  }
 
   else if (lastState == LOW && currentState == HIGH)
     Serial.println("The button is released");
@@ -125,51 +127,51 @@ if (lastState == HIGH && currentState == LOW){
 }
 
 
-AudioOutput_t updateAudio(){
+AudioOutput_t updateAudio() {
   long asig = (long)
-    redSin.next() * redGain +
-      orangeSin.next() * orangeGain +
-      yellowSin.next() * yellowGain +
-      greenSin.next() * greenGain +
-      cyanSin.next() * cyanGain +
-      blueSin.next() * blueGain +
-      indigoSin.next() * indigoGain +
-      violetSin.next() * violetGain;
+              redSin.next() * redGain +
+              orangeSin.next() * orangeGain +
+              yellowSin.next() * yellowGain +
+              greenSin.next() * greenGain +
+              cyanSin.next() * cyanGain +
+              blueSin.next() * blueGain +
+              indigoSin.next() * indigoGain +
+              violetSin.next() * violetGain;
   return MonoOutput::fromAlmostNBit(18, asig);
 
-  
-//return MonoOutput::from8Bit(((int))+((int))+((int))+((int))+((int))+((int))+((int))+((int)));
-//((int)cyanSin.next() * cyanGain)++((int)indigoSin.next() * indigoGain)+((int)violetSin.next() * violetGain) // return an int signal centred around 0
+
+  //return MonoOutput::from8Bit(((int))+((int))+((int))+((int))+((int))+((int))+((int))+((int)));
+  //((int)cyanSin.next() * cyanGain)++((int)indigoSin.next() * indigoGain)+((int)violetSin.next() * violetGain) // return an int signal centred around 0
 }
 
 
-void readSensor(){
-    as7341.setLEDCurrent(50); // 4mA
-    as7341.enableLED(true);
-    if (!as7341.readAllChannels()){
+void readSensor() {
+  as7341.setLEDCurrent(50); // 4mA
+  as7341.enableLED(true);
+  if (!as7341.readAllChannels()) {
     Serial.println("Error reading all channels!");
     return;
-    
-  
-  
-  // put changing controls in here
 
 
-  violetValue = as7341.getChannel(AS7341_CHANNEL_415nm_F1);
-  indigoValue = as7341.getChannel(AS7341_CHANNEL_445nm_F2);
-  blueValue = as7341.getChannel(AS7341_CHANNEL_480nm_F3);
-  cyanValue = as7341.getChannel(AS7341_CHANNEL_515nm_F4);
-  greenValue = as7341.getChannel(AS7341_CHANNEL_555nm_F5);
-  yellowValue = as7341.getChannel(AS7341_CHANNEL_590nm_F6);
-  orangeValue = as7341.getChannel(AS7341_CHANNEL_630nm_F7);
-  redValue =as7341.getChannel(AS7341_CHANNEL_680nm_F8);
+
+    // put changing controls in here
+
+
+    violetValue = as7341.getChannel(AS7341_CHANNEL_415nm_F1);
+    indigoValue = as7341.getChannel(AS7341_CHANNEL_445nm_F2);
+    blueValue = as7341.getChannel(AS7341_CHANNEL_480nm_F3);
+    cyanValue = as7341.getChannel(AS7341_CHANNEL_515nm_F4);
+    greenValue = as7341.getChannel(AS7341_CHANNEL_555nm_F5);
+    yellowValue = as7341.getChannel(AS7341_CHANNEL_590nm_F6);
+    orangeValue = as7341.getChannel(AS7341_CHANNEL_630nm_F7);
+    redValue = as7341.getChannel(AS7341_CHANNEL_680nm_F8);
   }
-  else{}
+  else {}
 }
 
-void loop(){
+void loop() {
   audioHook(); // required here
- 
+
 
   redGain =  map(redValue, 0, 1500, 0, 255);
   orangeGain =  map(orangeValue, 0, 1500, 0, 255);
