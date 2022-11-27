@@ -8,7 +8,9 @@
 
 #include <MozziGuts.h>
 #include <Oscil.h> // oscillator template
-#include <tables/sin2048_int8.h> // sine table for oscillator
+/*sine table for oscillators. choose others from mozzi 
+if triangle wave, square wave, etc, desired*/
+#include <tables/sin2048_int8.h> 
 #include <Adafruit_AS7341.h>
 #include <mozzi_midi.h>
 
@@ -27,7 +29,7 @@ int blue = 5;
 int indigo = 6;
 int violet = 7;
 
-//variables for determining dominant color
+//variables used for determining dominant color
 int theMax, current, maxI;
 
 // use: Oscil <table_size, update_rate> oscilName (wavetable), look in .h file of table #included above
