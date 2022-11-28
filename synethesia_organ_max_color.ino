@@ -1,7 +1,6 @@
 /*  An organ that plays notes according to input
     from an AS7341 color sensor using Mozzi 
     sonification library.
-
     Tim Barrass 2012, CC by-nc-sa.
     Emily Velasco 2022, CC by-nc-sa.
 */
@@ -105,7 +104,7 @@ void updateControl() {
   colorGains();
   /*communicates with the sensor ten times a second
   because I2C comms interrupts audio synthesis, this
-  is another balancing act. each communication over I2C
+  is a balancing act. each communication over I2C
   creates an audio pop. too often sounds like buzzing.
   too infrequent means code is slow to take sensor readings*/
   if (sensorTimeNow >= (sensorTimeLast + 100)) {
@@ -144,11 +143,11 @@ void readSensor() {
     return;
   }
 
-  // put changing controls in here
-
+//each time it loops, reset these for clean slate to compare from
+      theMax = 0;
+      current = 0;
 /*read the color channels from the sensor and write them into 
 the colorValues array for later use*/
-  for (byte i = 0; i < 8; i = i + 1) {
     colorValues[violet] = as7341.getChannel(AS7341_CHANNEL_415nm_F1);
     colorValues[indigo] = as7341.getChannel(AS7341_CHANNEL_445nm_F2);
     colorValues[blue] = as7341.getChannel(AS7341_CHANNEL_480nm_F3);
@@ -158,17 +157,13 @@ the colorValues array for later use*/
     colorValues[red] = as7341.getChannel(AS7341_CHANNEL_630nm_F7);
     colorValues[orange] = as7341.getChannel(AS7341_CHANNEL_680nm_F8);
 
-//compare all the color values to find which is greatest and log its index
+  for (byte i = 0; i < 8; i = i + 1) {
+
+    //compare all the color values to find which is greatest and log its index
     current = colorValues[i];
     if (current > theMax) {
       theMax = current;
       maxI = i;
-    }
-
-//after each time it loops, reset these for clean slate to compare from
-    if (i >= 7) {
-      theMax = 0;
-      current = 0;
     }
 
 
@@ -185,33 +180,33 @@ void colorGains() {
     indigoGain =  0;
     violetGain =  0;
     
-  if (maxI == 0) {
+  if (maxI == red) {
     redGain =  200;
   }
   
-  else if (maxI == 1) {
+  else if (maxI == orange) {
     orangeGain =  200;
   }
   
-  else if (maxI == 2) {
+  else if (maxI == yellow) {
     yellowGain =  200;
   }
   
-  else if (maxI == 3) {
+  else if (maxI == green) {
     greenGain =  200;
   }
   
-  else if (maxI == 4) {
+  else if (maxI == cyan) {
     cyanGain =  200;
   }
-  else if (maxI == 5) {
+  else if (maxI == blue) {
     blueGain =  200;
   }
-  else if (maxI == 6) {
+  else if (maxI == indigo) {
     indigoGain =  200;
   }
   
-  else if (maxI == 7) {
+  else if (maxI == violet) {
     violetGain =  200;
   }
 }
@@ -219,4 +214,3 @@ void loop() {
   audioHook(); // required here
 
 }
-
