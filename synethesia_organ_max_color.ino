@@ -176,91 +176,43 @@ the colorValues array for later use*/
 }
 //turns volume up for note associate with dominant color; mutes all others
 void colorGains() {
+    redGain =  0;
+    orangeGain =  0;
+    yellowGain =  0;
+    greenGain =  0;
+    cyanGain =  0;
+    blueGain =  0;
+    indigoGain =  0;
+    violetGain =  0;
+    
   if (maxI == 0) {
     redGain =  200;
-    orangeGain =  0;
-    yellowGain =  0;
-    greenGain =  0;
-    cyanGain =  0;
-    blueGain =  0;
-    indigoGain =  0;
-    violetGain =  0;
   }
+  
   else if (maxI == 1) {
-    redGain =  0;
     orangeGain =  200;
-    yellowGain =  0;
-    greenGain =  0;
-    cyanGain =  0;
-    blueGain =  0;
-    indigoGain =  0;
-    violetGain =  0;
   }
+  
   else if (maxI == 2) {
-    redGain =  0;
-    orangeGain =  0;
     yellowGain =  200;
-    greenGain =  0;
-    cyanGain =  0;
-    blueGain =  0;
-    indigoGain =  0;
-    violetGain =  0;
-
   }
+  
   else if (maxI == 3) {
-    redGain =  0;
-    orangeGain =  0;
-    yellowGain =  0;
     greenGain =  200;
-    cyanGain =  0;
-    blueGain =  0;
-    indigoGain =  0;
-    violetGain =  0;
-
   }
+  
   else if (maxI == 4) {
-    redGain =  0;
-    orangeGain =  0;
-    yellowGain =  0;
-    greenGain =  0;
     cyanGain =  200;
-    blueGain =  0;
-    indigoGain =  0;
-    violetGain =  0;
-
   }
   else if (maxI == 5) {
-    redGain =  0;
-    orangeGain =  0;
-    yellowGain =  0;
-    greenGain =  0;
-    cyanGain =  0;
     blueGain =  200;
-    indigoGain =  0;
-    violetGain =  0;
-
   }
   else if (maxI == 6) {
-    redGain =  0;
-    orangeGain =  0;
-    yellowGain =  0;
-    greenGain =  0;
-    cyanGain =  0;
-    blueGain =  0;
     indigoGain =  200;
-    violetGain =  0;
-
   }
+  
   else if (maxI == 7) {
-    redGain =  0;
-    orangeGain =  0;
-    yellowGain =  0;
-    greenGain =  0;
-    cyanGain =  0;
-    blueGain =  0;
-    indigoGain =  0;
     violetGain =  200;
-
   }
 }
 void loop() {
