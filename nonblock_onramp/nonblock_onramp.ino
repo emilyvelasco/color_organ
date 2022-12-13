@@ -15,17 +15,22 @@
  */
 
 #include <MozziGuts.h>   // at the top of your sketch
+#include <Oscil.h>  // a template for an oscillator
+#include <tables/sin2048_int8.h>  // a wavetable holding a sine wave
+
+#define CONTROL_RATE 128
+Oscil <2048, AUDIO_RATE> aSin(SIN2048_DATA);
 
 void setup() {
-	startMozzi();
+	aSin.setFreq(440);
+	startMozzi(CONTROL_RATE);
 }
 
 void updateControl(){
-	// your control code
 }
 
 int updateAudio(){
-	// your audio code which returns an int between -244 and 243
+	return aSin.next();
 }
 
 void loop() {
