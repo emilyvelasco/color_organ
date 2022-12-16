@@ -1,0 +1,146 @@
+//Headings correspond to Sharpie colors
+
+Red
+
+    Violet : 6140
+    Indigo : 5013
+    Blue : 5533
+    Cyan : 6632
+    Green : 4970
+    Yellow : 13101
+    Orange : 26216
+    Red : 37658
+    Infrared  : 65535
+
+Orange
+
+    Violet : 6496
+    Indigo : 5523
+    Blue : 6093
+    Cyan : 7153
+    Green : 9506
+    Yellow : 21805
+    Orange : 27361
+    Red : 36833
+    Infrared  : 65535
+
+
+Yellow
+
+    Violet : 6748
+    Indigo : 5221
+    Blue : 7753
+    Cyan : 15274
+    Green : 18326
+    Yellow : 24788
+    Orange : 27797
+    Red : 37247
+    Infrared  : 65535
+
+Yellow-green
+
+    Violet : 6252
+    Indigo : 5000
+    Blue : 6607
+    Cyan : 15551
+    Green : 17737
+    Yellow : 20787
+    Orange : 18993
+    Red : 22410
+    Infrared  : 65535
+
+Green
+
+    Violet : 6730
+    Indigo : 5742
+    Blue : 9634
+    Cyan : 17579
+    Green : 14249
+    Yellow : 13390
+    Orange : 11573
+    Red : 17200
+    Infrared  : 65535
+
+Cyan
+
+    Violet : 7962
+    Indigo : 8446
+    Blue : 13473
+    Cyan : 20730
+    Green : 19911
+    Yellow : 19439
+    Orange : 12984
+    Red : 12752
+    Infrared  : 65535
+
+Light Blue
+
+    Violet : 7478
+    Indigo : 9544
+    Blue : 13906
+    Cyan : 22515
+    Green : 21760
+    Yellow : 21374
+    Orange : 18771
+    Red : 17164
+    Infrared  : 65535
+
+Blue
+
+    Violet : 6847
+    Indigo : 9174
+    Blue : 11916
+    Cyan : 13361
+    Green : 5798
+    Yellow : 7530
+    Orange : 7309
+    Red : 12493
+    Infrared  : 65535
+
+Purple
+
+    Violet : 8866
+    Indigo : 11089
+    Blue : 14046
+    Cyan : 16667
+    Green : 10055
+    Yellow : 16145
+    Orange : 31883
+    Red : 51106
+    Infrared  : 65535
+
+Magenta
+
+    Violet : 8361
+    Indigo : 10044
+    Blue : 10656
+    Cyan : 11588
+    Green : 7899
+    Yellow : 17679
+    Orange : 41492
+    Red : 57654
+    Infrared  : 65535
+
+Brown 
+
+    Violet : 6533
+    Indigo : 6498
+    Blue : 6390
+    Cyan : 8648
+    Green : 7822
+    Yellow : 16218
+    Orange : 29067
+    Red : 44337
+    Infrared  : 65535
+
+Black
+
+    Violet : 3981
+    Indigo : 4128
+    Blue : 4644
+    Cyan : 6261
+    Green : 4232
+    Yellow : 5943
+    Orange : 8116
+    Red : 18164
+    Infrared  : 55271
