@@ -163,6 +163,9 @@ uint8_t register_write_byte(uint8_t i2c_address, uint8_t register_id, uint8_t re
   return twowire_endTransmission();
 }
 
+// The most recent set of AS7341 sensor values
+uint16_t as7341_readings[12];
+
 // AS7341 initial setup: queries chip for its product number and wake it up
 // from default SLEEP mode to IDLE. Uses blocking I2C communication.
 void as7341_setup() {
@@ -228,13 +231,26 @@ void as7341_setup() {
   }
 }
 
+void as7341_readAllSensors() {
+
+}
+
+unsigned long updateAudioCount;
+unsigned long updateControlCount;
+unsigned long loopCount;
+unsigned long nextPrint;
+
 // Update audio control (standard Mozzi callback)
 // This is called very frequently but not as frequently as updateAudio()
 // This is where we can perform logic that usually lives in loop() of an
 // Arduino sketch. We don't have to finish as quickly as updateAudio(), but
 // we still can't dawdle too much and we still can't use blocking waits like
 // delay().
+//
+// Mozzi running STANDARD audio mode on an Arduino Nano (ATmega328P)
+// will call updateControl() roughly 64 times per second.
 void updateControl(){
+  updateControlCount++;
   if (millis() > nextUpdate) {
     aSin.setFreq(scale4[currentNote++]);
     currentNote = currentNote % 8;
@@ -247,7 +263,11 @@ void updateControl(){
 // signal. The code needs to be very short and fast. Delay will cause
 // audible glitches like clicks or pops. Do only the most critical work
 // here, everything else can go in updateControl().
+//
+// Mozzi's STANDARD audio mode runs at 16384Hz, so updateAudio() is called
+// 16384 times per second. Will change in sync with speed of other modes.
 int updateAudio(){
+  updateAudioCount++;
   return aSin.next();
 }
 
@@ -262,7 +282,7 @@ void setup() {
 
   aSin.setFreq(440);
   startMozzi(CONTROL_RATE);
-  nextUpdate = millis();
+  nextUpdate = millis() + 500;
   currentNote = 0;
   Serial.println("Mozzi online");
 
@@ -271,6 +291,11 @@ void setup() {
   Serial.println("twi_nonblock initialized");
 
   as7341_setup();
+
+  updateAudioCount = 0;
+  updateControlCount = 0;
+  loopCount = 0;
+  nextPrint = millis() + 1000;
 
   Serial.println("Setup complete");
 }
@@ -282,4 +307,18 @@ void setup() {
 // taken care of, we can do our work in updateControl().
 void loop() {
   audioHook();
+  loopCount++;
+  if (millis() > nextPrint) {
+    Serial.print("loop ");
+    Serial.print(loopCount);
+    Serial.print(" updateControl ");
+    Serial.print(updateControlCount);
+    Serial.print(" updateAudio ");
+    Serial.println(updateAudioCount);
+
+    updateAudioCount = 0;
+    updateControlCount = 0;
+    loopCount = 0;
+    nextPrint = millis() + 1000;
+  }
 }
