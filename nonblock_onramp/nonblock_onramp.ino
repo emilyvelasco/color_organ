@@ -14,6 +14,10 @@
  * AS7341 I2C commands.
  *
  * AMS AS7341 datasheet references are against version v3-00 dated 2020-JUN-25
+ *
+ * Hardware: Mozzi twi_nonblock only supports AVR microcontrollers including
+ * the ATMega328P used in Arduino Nano. This will not run on non-AVR chips
+ * like the ESP32.
  */
 
 #include <MozziGuts.h>   // at the top of your sketch
@@ -41,7 +45,10 @@ Oscil <2048, AUDIO_RATE> aSin(SIN2048_DATA);
 unsigned long nextUpdate;
 uint8_t currentNote;
 
+/////////////////////////////////////////////////////////////////////////////
+//
 // AS7341 constants copied from Adafruit_AS7341.h
+//
 #define AS7341_I2CADDR_DEFAULT 0x39 ///< AS7341 default i2c address
 #define AS7341_CHIP_ID 0x09         ///< AS7341 default device id from WHOAMI
 #define AS7341_REVID 0x91           ///< Chip revision register
@@ -49,6 +56,33 @@ uint8_t currentNote;
 #define AS7341_ENABLE                                                          \
   0x80 ///< Main enable register. Controls SMUX, Flicker Detection, Spectral
        ///< Measurements and Power
+#define AS7341_ATIME 0x81        ///< Sets ADC integration step count
+#define AS7341_ASTEP_L 0xCA      ///< Integration step size low byte
+#define AS7341_ASTEP_H 0xCB      ///< Integration step size high byte
+#define AS7341_CFG1 0xAA         ///< Controls ADC Gain
+
+/**
+ * @brief Allowable gain multipliers for `setGain`
+ *
+ */
+typedef enum {
+  AS7341_GAIN_0_5X,
+  AS7341_GAIN_1X,
+  AS7341_GAIN_2X,
+  AS7341_GAIN_4X,
+  AS7341_GAIN_8X,
+  AS7341_GAIN_16X,
+  AS7341_GAIN_32X,
+  AS7341_GAIN_64X,
+  AS7341_GAIN_128X,
+  AS7341_GAIN_256X,
+  AS7341_GAIN_512X,
+} as7341_gain_t;
+
+//
+// End of excerpt directly copied from Adafruit_AS7341.h
+//
+/////////////////////////////////////////////////////////////////////////////
 
 // Utility functions calling into Mozzi twi_nonblock
 static volatile uint8_t async_status;
@@ -93,7 +127,10 @@ uint8_t blocking_read(uint8_t i2c_address, uint8_t register_id, uint8_t length) 
     }
   }
 
-  // Apparently a tiny bit of delay is required between twi_initiateReadFrom and checking twi_state
+  // Experimentally determined a tiny bit of delay is required between
+  // twi_initiateReadFrom() and checking twi_state. In normal nonblocking
+  // usage we would have handed control off to other code thus an explicit
+  // delay is not normally be needed.
   delay(1);
 
   // Wait for read operation to complete
@@ -116,10 +153,10 @@ uint8_t blocking_read(uint8_t i2c_address, uint8_t register_id, uint8_t length) 
   return async_status;
 }
 
-// Performs a write to a single register
+// Write a byte to specified register
 // Reviewing twi_nonblock code, looks like this is technically a blocking
 // operation but a single write is pretty fast and hasn't caused problems. (yet?)
-uint8_t register_write(uint8_t i2c_address, uint8_t register_id, uint8_t register_value) {
+uint8_t register_write_byte(uint8_t i2c_address, uint8_t register_id, uint8_t register_value) {
   twowire_beginTransmission(i2c_address);
   twowire_send(register_id);
   twowire_send(register_value);
@@ -127,7 +164,7 @@ uint8_t register_write(uint8_t i2c_address, uint8_t register_id, uint8_t registe
 }
 
 // AS7341 initial setup: queries chip for its product number and wake it up
-// from default SLEEP mode to IDLE. This is a blocking call.
+// from default SLEEP mode to IDLE. Uses blocking I2C communication.
 void as7341_setup() {
   uint8_t retVal;
   uint8_t revision;
@@ -156,10 +193,37 @@ void as7341_setup() {
   Serial.print("Successfully connected to AS7341 revision ");
   Serial.println(revision);
 
-  // AS7341 chip defaults to SLEEP state, we have to bring it to IDLE
-  retVal = register_write(AS7341_I2CADDR_DEFAULT, AS7341_ENABLE, 0x01);
+  // AS7341 chip powers up to SLEEP, we have to bring it to IDLE
+  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_ENABLE, 0x01);
   if (0 != retVal) {
     Serial.print("ERROR: Failed to send AS7341 enable command to bring it from SLEEP to IDLE. ");
+    Serial.println(retVal);
+  }
+
+  // Configure integration time.
+  // Total integration time will be (ATIME + 1) * (ASTEP + 1) * 2.78µS
+  // Datasheet: "typical integration time" is listed as 50ms (ATIME=29 ASTEP=599 50.04ms)
+  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_ATIME, 29);
+  if (0 != retVal) {
+    Serial.print("ERROR: Failed to set AS7341 sensor integration ATIME. ");
+    Serial.println(retVal);
+  }
+  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_ASTEP_L, (uint8_t)(599 & 0xFF));
+  if (0 != retVal) {
+    Serial.print("ERROR: Failed to set AS7341 sensor integration ASTEP low byte. ");
+    Serial.println(retVal);
+  }
+  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_ASTEP_H, (uint8_t)((599>>8) & 0xFF));
+  if (0 != retVal) {
+    Serial.print("ERROR: Failed to set AS7341 sensor integration ASTEP high byte. ");
+    Serial.println(retVal);
+  }
+
+  // Configure sensor gain.
+  // TODO: Figure out how auto-gain control works on this sensor
+  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_CFG1, AS7341_GAIN_256X);
+  if (0 != retVal) {
+    Serial.print("ERROR: Failed to configure AS7341 sensor gain. ");
     Serial.println(retVal);
   }
 }
@@ -180,9 +244,9 @@ void updateControl(){
 
 // Update audio signal (standard Mozzi callback)
 // This is called EXTREMELY frequently to update the currently generated
-// signal. The code needs to be very short and fast. Excessive delay will
-// cause audible glitches like clicks or pops. Offload as much work to
-// updateControl() as possible.
+// signal. The code needs to be very short and fast. Delay will cause
+// audible glitches like clicks or pops. Do only the most critical work
+// here, everything else can go in updateControl().
 int updateAudio(){
   return aSin.next();
 }
