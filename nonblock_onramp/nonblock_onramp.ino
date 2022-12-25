@@ -235,11 +235,6 @@ void as7341_readAllSensors() {
 
 }
 
-unsigned long updateAudioCount;
-unsigned long updateControlCount;
-unsigned long loopCount;
-unsigned long nextPrint;
-
 // Update audio control (standard Mozzi callback)
 // This is called very frequently but not as frequently as updateAudio()
 // This is where we can perform logic that usually lives in loop() of an
@@ -250,7 +245,6 @@ unsigned long nextPrint;
 // Mozzi running STANDARD audio mode on an Arduino Nano (ATmega328P)
 // will call updateControl() roughly 64 times per second.
 void updateControl(){
-  updateControlCount++;
   if (millis() > nextUpdate) {
     aSin.setFreq(scale4[currentNote++]);
     currentNote = currentNote % 8;
@@ -267,7 +261,6 @@ void updateControl(){
 // Mozzi's STANDARD audio mode runs at 16384Hz, so updateAudio() is called
 // 16384 times per second. Will change in sync with speed of other modes.
 int updateAudio(){
-  updateAudioCount++;
   return aSin.next();
 }
 
@@ -292,11 +285,6 @@ void setup() {
 
   as7341_setup();
 
-  updateAudioCount = 0;
-  updateControlCount = 0;
-  loopCount = 0;
-  nextPrint = millis() + 1000;
-
   Serial.println("Setup complete");
 }
 
@@ -307,18 +295,4 @@ void setup() {
 // taken care of, we can do our work in updateControl().
 void loop() {
   audioHook();
-  loopCount++;
-  if (millis() > nextPrint) {
-    Serial.print("loop ");
-    Serial.print(loopCount);
-    Serial.print(" updateControl ");
-    Serial.print(updateControlCount);
-    Serial.print(" updateAudio ");
-    Serial.println(updateAudioCount);
-
-    updateAudioCount = 0;
-    updateControlCount = 0;
-    loopCount = 0;
-    nextPrint = millis() + 1000;
-  }
 }
