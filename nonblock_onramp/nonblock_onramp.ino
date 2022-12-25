@@ -126,7 +126,8 @@ uint8_t register_write(uint8_t i2c_address, uint8_t register_id, uint8_t registe
   return twowire_endTransmission();
 }
 
-// AS7341 code
+// AS7341 initial setup: queries chip for its product number and wake it up
+// from default SLEEP mode to IDLE. This is a blocking call.
 void as7341_setup() {
   uint8_t retVal;
   uint8_t revision;
@@ -163,6 +164,29 @@ void as7341_setup() {
   }
 }
 
+// Update audio control (standard Mozzi callback)
+// This is called very frequently but not as frequently as updateAudio()
+// This is where we can perform logic that usually lives in loop() of an
+// Arduino sketch. We don't have to finish as quickly as updateAudio(), but
+// we still can't dawdle too much and we still can't use blocking waits like
+// delay().
+void updateControl(){
+  if (millis() > nextUpdate) {
+    aSin.setFreq(scale4[currentNote++]);
+    currentNote = currentNote % 8;
+    nextUpdate = millis() + 500;
+  }
+}
+
+// Update audio signal (standard Mozzi callback)
+// This is called EXTREMELY frequently to update the currently generated
+// signal. The code needs to be very short and fast. Excessive delay will
+// cause audible glitches like clicks or pops. Offload as much work to
+// updateControl() as possible.
+int updateAudio(){
+  return aSin.next();
+}
+
 // One-time initial setup (standard Arduino boilerplate)
 void setup() {
   Serial.begin(115200);
@@ -172,8 +196,8 @@ void setup() {
   }
   Serial.println("Serial online");
 
-	aSin.setFreq(440);
-	startMozzi(CONTROL_RATE);
+  aSin.setFreq(440);
+  startMozzi(CONTROL_RATE);
   nextUpdate = millis();
   currentNote = 0;
   Serial.println("Mozzi online");
@@ -187,18 +211,11 @@ void setup() {
   Serial.println("Setup complete");
 }
 
-void updateControl(){
-  if (millis() > nextUpdate) {
-    aSin.setFreq(scale4[currentNote++]);
-    currentNote = currentNote % 8;
-    nextUpdate = millis() + 500;
-  }
-}
-
-int updateAudio(){
-	return aSin.next();
-}
-
+// Endless loop (standard Arduino boilerplate)
+// In most Arduino sketches, this is where most of the logic lives.
+// However, in a Mozzi sketch, we give audioHook() immediate control so it
+// gets first dibs on processor computing time. Once critical tasks are
+// taken care of, we can do our work in updateControl().
 void loop() {
-	audioHook();
+  audioHook();
 }
