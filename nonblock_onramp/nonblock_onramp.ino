@@ -60,6 +60,7 @@ uint8_t currentNote;
 #define AS7341_ASTEP_L 0xCA      ///< Integration step size low byte
 #define AS7341_ASTEP_H 0xCB      ///< Integration step size high byte
 #define AS7341_CFG1 0xAA         ///< Controls ADC Gain
+#define AS7341_CFG6 0xAF         ///< Used to configure Smux
 
 /**
  * @brief Allowable gain multipliers for `setGain`
@@ -79,6 +80,16 @@ typedef enum {
   AS7341_GAIN_512X,
 } as7341_gain_t;
 
+/**
+ * @brief Available SMUX configuration commands
+ *
+ */
+typedef enum {
+  AS7341_SMUX_CMD_ROM_RESET, ///< ROM code initialization of SMUX
+  AS7341_SMUX_CMD_READ,      ///< Read SMUX configuration to RAM from SMUX chain
+  AS7341_SMUX_CMD_WRITE, ///< Write SMUX configuration from RAM to SMUX chain
+} as7341_smux_cmd_t;
+
 //
 // End of excerpt directly copied from Adafruit_AS7341.h
 //
@@ -90,6 +101,46 @@ static volatile uint8_t async_status;
 #define ASYNC_READING 1
 #define ASYNC_WRITING 2
 #define ASYNC_ERROR 255
+
+// SMUX configuration copied from Adafruit_AS7341::setup_F1F4_Clear_NIR()
+const uint8_t SMUX_config_size = 21;
+uint8_t SMUX_F1F4_Clear_NIR[SMUX_config_size] = {
+  // SMUX Config for F1,F2,F3,F4,NIR,Clear
+  0x00, // Write starts at register zero
+  0x30, // F3 left set to ADC2
+  0x01, // F1 left set to ADC0
+  0x00, // Reserved or disabled
+  0x00, // F8 left disabled
+  0x00, // F6 left disabled
+  0x42, // F4 left connected to ADC3/f2 left connected to ADC1
+  0x00, // F5 left disbled
+  0x00, // F7 left disbled
+  0x50, // CLEAR connected to ADC4
+  0x00, // F5 right disabled
+  0x00, // F7 right disabled
+  0x00, // Reserved or disabled
+  0x20, // F2 right connected to ADC1
+  0x04, // F4 right connected to ADC3
+  0x00, // F6/F8 right disabled
+  0x30, // F3 right connected to AD2
+  0x01, // F1 right connected to AD0
+  0x50, // CLEAR right connected to AD4
+  0x00, // Reserved or disabled
+  0x06  // NIR connected to ADC5
+};
+
+static volatile uint8_t as7341_read_status;
+unsigned long as7341_read_start;
+typedef enum {
+  AS7341_READ_IDLE,
+  AS7341_READ_QUERY_SMUX_1_ADDR,
+  AS7341_READ_QUERY_SMUX_1_ADDR_WAIT,
+  AS7341_READ_QUERY_SMUX_1_READ,
+  AS7341_READ_QUERY_SMUX_1_READ_WAIT,
+  AS7341_READ_QUERY_SMUX_1_COPY,
+  AS7341_READ_COMPLETE,
+  AS7341_READ_ERROR
+} as7341_read_steps;
 
 // Mozzi twi_nonblock has its own internal memory for I2C data (twi_masterBuffer)
 //
@@ -163,12 +214,17 @@ uint8_t register_write_byte(uint8_t i2c_address, uint8_t register_id, uint8_t re
   return twowire_endTransmission();
 }
 
+// Register AS7341_ENABLE (0x80) has multiple flags that are set/cleared
+// for different operations. But reading and writing has to be done all
+// eight bits of the byte at once, so we have to track what's going on.
+uint8_t as7341EnableRegister;
+
 // The most recent set of AS7341 sensor values
-uint16_t as7341_readings[12];
+uint16_t as7341Readings[12];
 
 // AS7341 initial setup: queries chip for its product number and wake it up
 // from default SLEEP mode to IDLE. Uses blocking I2C communication.
-void as7341_setup() {
+void as7341Setup() {
   uint8_t retVal;
   uint8_t revision;
   uint8_t part_number;
@@ -197,11 +253,8 @@ void as7341_setup() {
   Serial.println(revision);
 
   // AS7341 chip powers up to SLEEP, we have to bring it to IDLE
-  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_ENABLE, 0x01);
-  if (0 != retVal) {
-    Serial.print("ERROR: Failed to send AS7341 enable command to bring it from SLEEP to IDLE. ");
-    Serial.println(retVal);
-  }
+  as7341EnableRegister = 0x01;
+  as7341UpdateEnableRegister();
 
   // Configure integration time.
   // Total integration time will be (ATIME + 1) * (ASTEP + 1) * 2.78µS
@@ -229,9 +282,175 @@ void as7341_setup() {
     Serial.print("ERROR: Failed to configure AS7341 sensor gain. ");
     Serial.println(retVal);
   }
+
+  // Configuration complete, we are ready to start reading sensor
+  as7341_read_status = AS7341_READ_IDLE;
 }
 
-void as7341_readAllSensors() {
+// Update AS7341 ENABLE register with our tracking value.
+void as7341UpdateEnableRegister() {
+  uint8_t retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_ENABLE, as7341EnableRegister);
+  if (0 != retVal) {
+    Serial.print("ERROR: Failed to update AS7341 enable register to ");
+    Serial.print(as7341EnableRegister);
+    Serial.print(" error ");
+    Serial.println(retVal);
+  }
+}
+
+// AS7341 spectral measurement needs to be disabled for SMUX configuration
+// and re-enabled for reading sensor.
+void as7341EnableSpectralMeasurement(bool enable_measurement) {
+  if (enable_measurement) {
+    as7341EnableRegister |= 0b00000010;
+  } else {
+    as7341EnableRegister &= 0b11111101;
+  }
+  as7341UpdateEnableRegister();
+}
+
+// Tell AS7341 that SMUX configuration data is coming.
+void as7341SMUXWrite() {
+  uint8_t retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_SMUX_CMD_WRITE, (AS7341_SMUX_CMD_WRITE << 3));
+  if (0 != retVal) {
+    Serial.print("ERROR: Failed to configure AS7341 SMUX for writing ");
+    Serial.println(retVal);
+  }
+}
+
+// After SMUX configuration data has been sent, tell AS7341 to enable
+// new configuration.
+void as7341SMUXEnable() {
+  as7341EnableRegister |= 0b00010000;
+  as7341UpdateEnableRegister();
+}
+
+bool as7341SMUXEnableBitSet(uint8_t enableRegister) {
+  if (0 != enableRegister & 0b00010000) {
+    return true;
+  } else {
+    return false;
+  }
+}
+
+// Send AS7341 SMUX configuration to read F1-F4, Clear, and NIR sensors.
+void as7341SMUX_F1F4ClearNIR() {
+  uint8_t retVal = twi_writeToBlocking(AS7341_I2CADDR_DEFAULT, SMUX_F1F4_Clear_NIR, SMUX_config_size, true /* wait for completion */);
+  if (0 != retVal) {
+    Serial.print("ERROR: Failed to configure AS7341 SMUX for F1F4ClearNIR ");
+    Serial.println(retVal);
+  }
+}
+
+bool asyncTimeOutCheck() {
+  if (millis() < as7341_read_start) {
+    Serial.println("Timeout counter overflow, resetting");
+    as7341_read_start = millis();
+    return false;
+  }
+
+  if (millis() > as7341_read_start + 1000) {
+    Serial.println("Async operation timed out.");
+    as7341_read_status = AS7341_READ_ERROR;
+    return true;
+  }
+
+  return false;
+}
+
+void as7341ReadAllChannelsProcess() {
+  uint8_t retVal;
+  uint8_t available;
+
+  switch(as7341_read_status) {
+    case AS7341_READ_IDLE:
+      // Disable spectral measurement then send SMUX configuration
+      as7341EnableSpectralMeasurement(false);
+      as7341SMUXWrite();
+      as7341SMUX_F1F4ClearNIR();
+      as7341SMUXEnable();
+      as7341_read_status = AS7341_READ_QUERY_SMUX_1_ADDR;
+      break;
+    case AS7341_READ_QUERY_SMUX_1_ADDR:
+      // Read ENABLE register to see SMUX status
+      asyncBuffer[0] = AS7341_ENABLE;
+      twi_initiateWriteTo(AS7341_I2CADDR_DEFAULT, asyncBuffer, 1);
+      as7341_read_start = millis();
+      as7341_read_status = AS7341_READ_QUERY_SMUX_1_ADDR_WAIT;
+      break;
+    case AS7341_READ_QUERY_SMUX_1_ADDR_WAIT:
+      // Waiting for address write to complete
+      if ( TWI_MTX != twi_state ){
+        as7341_read_status = AS7341_READ_QUERY_SMUX_1_READ;
+      }
+      asyncTimeOutCheck();
+      break;
+    case AS7341_READ_QUERY_SMUX_1_READ:
+      // Address write complete, initiate read operation
+      retVal = twi_initiateReadFrom(AS7341_I2CADDR_DEFAULT, 1);
+
+      if (retVal != 0) {
+        Serial.print("ERROR: twi_initiateReadFrom failed with ");
+        Serial.println(retVal);
+        as7341_read_status = AS7341_READ_ERROR;
+      } else {
+        as7341_read_status = AS7341_READ_QUERY_SMUX_1_READ_WAIT;
+      }
+      break;
+    case AS7341_READ_QUERY_SMUX_1_READ_WAIT:
+      // Waiting for read operation to complete
+      if (TWI_MRX != twi_state) {
+        as7341_read_status = AS7341_READ_QUERY_SMUX_1_COPY;
+      }
+      asyncTimeOutCheck();
+      break;
+    case AS7341_READ_QUERY_SMUX_1_COPY:
+      // Current ENABLE register value retrieved, let's look at it.
+      available = twi_readMasterBuffer(asyncBuffer, 1);
+
+      if (available != 1) {
+        Serial.print("ERROR: Wanted 1 ENABLE byte but read ");
+        Serial.print(available);
+        as7341_read_status = AS7341_READ_ERROR;
+      }
+
+      if (as7341SMUXEnableBitSet(asyncBuffer[0])) {
+        // SMUX not ready yet, read ENABLE again.
+        as7341_read_status = AS7341_READ_QUERY_SMUX_1_ADDR;
+      } else {
+        // SMUX ready, update register value and start a read!
+        as7341EnableRegister = asyncBuffer[0];
+        as7341EnableSpectralMeasurement(true);
+        as7341_read_status = AS7341_READ_COMPLETE;
+      }
+      break;
+    case AS7341_READ_COMPLETE:
+      // Sensor read and waiting for reset to AS7341_READ_IDLE
+      break;
+    case AS7341_READ_ERROR:
+      // Do nothing, hold in error state.
+      break;
+    default:
+      Serial.print("Unexpected value for as7341_read_status ");
+      Serial.println(as7341_read_status);
+      break;
+  }
+/*
+  enableSpectralMeasurement(false);
+  setSMUXCommand(AS7341_SMUX_CMD_WRITE);
+  setup_F1F4_Clear_NIR();
+  enableSMUX();
+  enableSpectralMeasurement(true); // Start integration
+  Spin waiting for AS7341_STATUS2 bit 6 (data ready)
+  Read 12 bytes starting AS7341_CH0_DATA_L
+
+  enableSpectralMeasurement(false);
+  setSMUXCommand(AS7341_SMUX_CMD_WRITE);
+  setup_F5F8_Clear_NIR();
+  enableSMUX();
+  enableSpectralMeasurement(true); // Start integration
+  Read 12 bytes starting AS7341_CH0_DATA_L
+*/
 
 }
 
@@ -249,6 +468,12 @@ void updateControl(){
     aSin.setFreq(scale4[currentNote++]);
     currentNote = currentNote % 8;
     nextUpdate = millis() + 500;
+  }
+  if (AS7341_READ_COMPLETE == as7341_read_status) {
+    Serial.println("Reading complete");
+    as7341_read_status = AS7341_READ_ERROR;
+  } else {
+    as7341ReadAllChannelsProcess();
   }
 }
 
@@ -283,7 +508,7 @@ void setup() {
   initialize_twi_nonblock();
   Serial.println("twi_nonblock initialized");
 
-  as7341_setup();
+  as7341Setup();
 
   Serial.println("Setup complete");
 }
