@@ -11,15 +11,30 @@
  * https://github.com/sensorium/Mozzi
  *
  * To resolve this issue, Mozzi includes a non-blocking I2C library under the
- * name twi_nonblock. This sketch explores using twi_nonblock to talk to
+ * name twi_nonblock. Here is an example sketch uses twi_nonblock to read from
+ * an ADXL345 accelerometer.
+ * https://github.com/sensorium/Mozzi/tree/master/examples/11.Communication/TwoWire_Read_ADXL345
+ *
+ * This example follows that precedence and uses twi_nonblock to talk to
  * AMS AS7341 using Adafruit's library as a guide and also for declaration of
  * AS7341 I2C commands.
+ * https://github.com/adafruit/Adafruit_AS7341
  *
  * AMS AS7341 datasheet references are against version v3-00 dated 2020-JUN-25
+ * https://ams.com/as7341
  *
- * Hardware: Mozzi twi_nonblock only supports AVR microcontrollers including
- * the ATMega328P used in Arduino Nano. This will not run on non-AVR chips
- * like the ESP32.
+ * Hardware: Mozzi twi_nonblock only supports AVR microcontrollers, will not
+ * run on non-AVR chips like the ESP32. Developed on an Arduino Nano with
+ * ATmega328P microcontroller.
+ *
+ * I2C pins: A4 is SDA, A5 is SCL. Reference:
+ * https://www.arduino.cc/reference/en/language/functions/communication/wire/
+ *
+ * Audio output pin is D9. Reference:
+ * https://sensorium.github.io/Mozzi/learn/output/
+ *
+ *
+ *
  *
  * Released under MIT License:
 
@@ -44,11 +59,11 @@
   SOFTWARE.
  */
 
-#include <MozziGuts.h>   // at the top of your sketch
-#include <mozzi_midi.h>
-#include <Oscil.h>  // a template for an oscillator
-#include <tables/sin2048_int8.h>  // a wavetable holding a sine wave
-#include <twi_nonblock.h>
+#include <MozziGuts.h>            // Mozzi core
+#include <mozzi_midi.h>           // To convert MIDI note to frequency
+#include <Oscil.h>                // Oscillator template
+#include <tables/sin2048_int8.h>  // Sine wave table
+#include <twi_nonblock.h>         // Non-blocking I2C library
 
 /////////////////////////////////////////////////////////////////////////////
 // Declarations supporting Mozzi audio generation
