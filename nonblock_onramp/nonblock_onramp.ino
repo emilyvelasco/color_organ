@@ -151,24 +151,11 @@ uint8_t SMUX_F1F4_Clear_NIR[SMUX_config_size] = {
 };
 
 static volatile uint8_t as7341_read_status;
-unsigned long as7341_read_start;
 typedef enum {
   AS7341_READ_IDLE,
-  AS7341_READ_QUERY_SMUX_1_ADDR,
-  AS7341_READ_QUERY_SMUX_1_ADDR_WAIT,
-  AS7341_READ_QUERY_SMUX_1_READ,
-  AS7341_READ_QUERY_SMUX_1_READ_WAIT,
-  AS7341_READ_QUERY_SMUX_1_COPY,
-  AS7341_READ_QUERY_READY_1_ADDR,
-  AS7341_READ_QUERY_READY_1_ADDR_WAIT,
-  AS7341_READ_QUERY_READY_1_READ,
-  AS7341_READ_QUERY_READY_1_READ_WAIT,
-  AS7341_READ_QUERY_READY_1_COPY,
-  AS7341_READ_DATA_1_ADDR,
-  AS7341_READ_DATA_1_ADDR_WAIT,
-  AS7341_READ_DATA_1_READ,
-  AS7341_READ_DATA_1_READ_WAIT,
-  AS7341_READ_DATA_1_COPY,
+  AS7341_READ_SMUX,
+  AS7341_READ_READY,
+  AS7341_READ_DATA,
   AS7341_READ_COMPLETE,
   AS7341_READ_ERROR
 } as7341_read_steps;
@@ -235,6 +222,24 @@ uint8_t blocking_read(uint8_t i2c_address, uint8_t register_id, uint8_t length) 
   return async_status;
 }
 
+unsigned long async_read_start;
+// Check for timeout during waits for asynchronous operation
+bool asyncTimeOutCheck() {
+  if (millis() < async_read_start) {
+    Serial.println("Timeout counter overflow, resetting");
+    async_read_start = millis();
+    return false;
+  }
+
+  if (millis() > async_read_start + 1000) {
+    Serial.println("Async operation timed out.");
+    async_status = ASYNC_ERROR;
+    return true;
+  }
+
+  return false;
+}
+
 // State machine to handle a single asynchronous read. Supports only a single
 // read operation at any given time. Current state is tracked in global variable
 // async_status. Caller should call this frequently and check for the following
@@ -250,6 +255,7 @@ uint8_t async_read(uint8_t i2c_address, uint8_t register_id, uint8_t length) {
       // Send address of register where we want to start reading
       async_buffer[0] = register_id;
       twi_initiateWriteTo(i2c_address, async_buffer, 1);
+      async_read_start = millis();
       async_status = ASYNC_WRITING;
       break;
     case ASYNC_WRITING:
@@ -265,6 +271,7 @@ uint8_t async_read(uint8_t i2c_address, uint8_t register_id, uint8_t length) {
           async_status = ASYNC_READING;
         }
       }
+      asyncTimeOutCheck();
       break;
     case ASYNC_READING:
       if (TWI_MRX != twi_state) {
@@ -280,6 +287,7 @@ uint8_t async_read(uint8_t i2c_address, uint8_t register_id, uint8_t length) {
         }
         async_status = ASYNC_COMPLETE;
       }
+      asyncTimeOutCheck();
       break;
     case ASYNC_COMPLETE:
     case ASYNC_ERROR:
@@ -443,28 +451,8 @@ void as7341SMUX_F1F4ClearNIR() {
   }
 }
 
-// Check for timeout during waits for asynchronous operation
-bool asyncTimeOutCheck() {
-  if (millis() < as7341_read_start) {
-    Serial.println("Timeout counter overflow, resetting");
-    as7341_read_start = millis();
-    return false;
-  }
-
-  if (millis() > as7341_read_start + 1000) {
-    Serial.println("Async operation timed out.");
-    as7341_read_status = AS7341_READ_ERROR;
-    return true;
-  }
-
-  return false;
-}
-
 // Reads all channels of AS7341. Analogous to Adafruit_AS7341::readAllChannels
 void as7341ReadAllChannelsProcess() {
-  uint8_t retVal;
-  uint8_t available;
-
   switch(as7341_read_status) {
     case AS7341_READ_IDLE:
       // Disable spectral measurement then send SMUX configuration
@@ -472,130 +460,40 @@ void as7341ReadAllChannelsProcess() {
       as7341SMUXWrite();
       as7341SMUX_F1F4ClearNIR();
       as7341SMUXEnable();
-      as7341_read_status = AS7341_READ_QUERY_SMUX_1_ADDR;
+      as7341_read_status = AS7341_READ_SMUX;
       break;
-    case AS7341_READ_QUERY_SMUX_1_ADDR:
+    case AS7341_READ_SMUX:
       // Read ENABLE register to see SMUX status
-      async_buffer[0] = AS7341_ENABLE;
-      twi_initiateWriteTo(AS7341_I2CADDR_DEFAULT, async_buffer, 1);
-      as7341_read_start = millis();
-      as7341_read_status = AS7341_READ_QUERY_SMUX_1_ADDR_WAIT;
-      break;
-    case AS7341_READ_QUERY_SMUX_1_ADDR_WAIT:
-      // Waiting for address write to complete
-      if ( TWI_MTX != twi_state ){
-        as7341_read_status = AS7341_READ_QUERY_SMUX_1_READ;
-      }
-      asyncTimeOutCheck();
-      break;
-    case AS7341_READ_QUERY_SMUX_1_READ:
-      // Address write complete, initiate read operation
-      retVal = twi_initiateReadFrom(AS7341_I2CADDR_DEFAULT, 1);
-
-      if (retVal != 0) {
-        Serial.print("ERROR: twi_initiateReadFrom failed with ");
-        Serial.println(retVal);
-        as7341_read_status = AS7341_READ_ERROR;
-      } else {
-        as7341_read_status = AS7341_READ_QUERY_SMUX_1_READ_WAIT;
-      }
-      break;
-    case AS7341_READ_QUERY_SMUX_1_READ_WAIT:
-      // Waiting for read operation to complete
-      if (TWI_MRX != twi_state) {
-        as7341_read_status = AS7341_READ_QUERY_SMUX_1_COPY;
-      }
-      asyncTimeOutCheck();
-      break;
-    case AS7341_READ_QUERY_SMUX_1_COPY:
-      // Current ENABLE register value retrieved, let's look at it.
-      available = twi_readMasterBuffer(async_buffer, 1);
-
-      if (available != 1) {
-        Serial.print("ERROR: Wanted 1 ENABLE byte but read ");
-        Serial.print(available);
-        as7341_read_status = AS7341_READ_ERROR;
-        break;
-      }
-
-      if (as7341SMUXEnableBitSet(async_buffer[0])) {
-        // SMUX not ready yet, read ENABLE again.
-        as7341_read_status = AS7341_READ_QUERY_SMUX_1_ADDR;
-      } else {
-        // SMUX ready, update register value and start a read!
-        as7341EnableRegister = async_buffer[0];
-        as7341EnableSpectralMeasurement(true);
-        as7341_read_status = AS7341_READ_QUERY_READY_1_ADDR;
-      }
-      break;
-    case AS7341_READ_QUERY_READY_1_ADDR:
-      // Read STATUS2 register to see if data is ready
-      async_buffer[0] = AS7341_STATUS2;
-      twi_initiateWriteTo(AS7341_I2CADDR_DEFAULT, async_buffer, 1);
-      as7341_read_start = millis();
-      as7341_read_status = AS7341_READ_QUERY_READY_1_ADDR_WAIT;
-      break;
-    case AS7341_READ_QUERY_READY_1_ADDR_WAIT:
-      // Waiting for address write to complete
-      if ( TWI_MTX != twi_state ){
-        as7341_read_status = AS7341_READ_QUERY_READY_1_READ;
-      }
-      asyncTimeOutCheck();
-      break;
-    case AS7341_READ_QUERY_READY_1_READ:
-      // Address write complete, initiate read operation
-      retVal = twi_initiateReadFrom(AS7341_I2CADDR_DEFAULT, 1);
-
-      if (retVal != 0) {
-        Serial.print("ERROR: twi_initiateReadFrom failed with ");
-        Serial.println(retVal);
-        as7341_read_status = AS7341_READ_ERROR;
-      } else {
-        as7341_read_status = AS7341_READ_QUERY_READY_1_READ_WAIT;
-      }
-      break;
-    case AS7341_READ_QUERY_READY_1_READ_WAIT:
-      // Waiting for read operation to complete
-      if (TWI_MRX != twi_state) {
-        as7341_read_status = AS7341_READ_QUERY_READY_1_COPY;
-      }
-      asyncTimeOutCheck();
-      break;
-    case AS7341_READ_QUERY_READY_1_COPY:
-      // Current STATUS2 register value retrieved, let's look at it.
-      available = twi_readMasterBuffer(async_buffer, 1);
-
-      if (available != 1) {
-        Serial.print("ERROR: Wanted 1 STATUS2 byte but read ");
-        Serial.print(available);
-        as7341_read_status = AS7341_READ_ERROR;
-        break;
-      }
-
-      if (as7341SpectralValid(async_buffer[0])) {
-        // Spectrum is valid, move on to retrieve that data.
-        as7341_read_status = AS7341_READ_DATA_1_ADDR;
-        if (ASYNC_IDLE != async_status) {
-          Serial.println("ERROR: No async_read operation should be in progress.");
-          break;
+      async_read(AS7341_I2CADDR_DEFAULT, AS7341_ENABLE, 1);
+      if (ASYNC_COMPLETE == async_status) {
+        if (!as7341SMUXEnableBitSet(async_buffer[0])) {
+          // SMUX ready, update register value and start a read!
+          as7341EnableRegister = async_buffer[0];
+          as7341EnableSpectralMeasurement(true);
+          as7341_read_status = AS7341_READ_READY;
         }
-      } else {
-        // Spectrum is not yet ready, re-read STATUS2
-        as7341_read_status = AS7341_READ_QUERY_READY_1_ADDR;
+        async_status = ASYNC_IDLE;
       }
       break;
-    case AS7341_READ_DATA_1_ADDR:
+    case AS7341_READ_READY:
+      // Read STATUS2 register to see if data is ready
+      async_read(AS7341_I2CADDR_DEFAULT, AS7341_STATUS2, 1);
+      if (ASYNC_COMPLETE == async_status) {
+        if (as7341SpectralValid(async_buffer[0])) {
+          // Spectrum is valid, move on to retrieve that data.
+          as7341_read_status = AS7341_READ_DATA;
+        }
+        async_status = ASYNC_IDLE;
+      }
+      break;
+    case AS7341_READ_DATA:
+      // Read 12 bytes (6 16-bit spectral sensor values) from AS7341_CH0_DATA_L
       async_read(AS7341_I2CADDR_DEFAULT, AS7341_CH0_DATA_L, 12);
       if (ASYNC_COMPLETE == async_status) {
-        for(int i = 0; i < 12; i++) {
-          Serial.print(async_buffer[i],HEX);
-          Serial.print("\t");
-        }
-        Serial.println();
         for(int i = 0; i < 6; i++) {
           as7341Readings[i] = async_buffer[(i*2)] + (async_buffer[(i*2)+1]<<8);
           Serial.print(as7341Readings[i]);
-          Serial.print("\t\t");
+          Serial.print("\t");
         }
         Serial.println();
 
@@ -607,7 +505,7 @@ void as7341ReadAllChannelsProcess() {
       // Sensor read and waiting for reset to AS7341_READ_IDLE
       break;
     case AS7341_READ_ERROR:
-      // Do nothing, hold in error state.
+      // Do nothing, hold in error state waiting for reset to AS7341_READ_IDLE
       break;
     default:
       Serial.print("Unexpected value for as7341_read_status ");
@@ -617,13 +515,13 @@ void as7341ReadAllChannelsProcess() {
 }
 
 // Update audio control (standard Mozzi callback)
-// This is called very frequently but not as frequently as updateAudio()
+// This is called very frequently (*) but not as frequently as updateAudio()
 // This is where we can perform logic that usually lives in loop() of an
 // Arduino sketch. We don't have to finish as quickly as updateAudio(), but
 // we still can't dawdle too much and we still can't use blocking waits like
 // delay().
 //
-// Mozzi running STANDARD audio mode on an Arduino Nano (ATmega328P)
+// (*) Mozzi running STANDARD audio mode on an Arduino Nano (ATmega328P)
 // will call updateControl() roughly 64 times per second.
 void updateControl(){
   if (millis() > nextUpdate) {
@@ -639,13 +537,13 @@ void updateControl(){
 }
 
 // Update audio signal (standard Mozzi callback)
-// This is called EXTREMELY frequently to update the currently generated
+// This is called EXTREMELY frequently (*) to update the currently generated
 // signal. The code needs to be very short and fast. Delay will cause
 // audible glitches like clicks or pops. Do only the most critical work
 // here, everything else can go in updateControl().
 //
-// Mozzi's STANDARD audio mode runs at 16384Hz, so updateAudio() is called
-// 16384 times per second. Will change in sync with speed of other modes.
+// (*) Mozzi's STANDARD audio mode runs at 16384Hz, so updateAudio() is called
+// 16384 times per second.
 int updateAudio(){
   return aSin.next();
 }
