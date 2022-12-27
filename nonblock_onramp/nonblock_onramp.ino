@@ -127,11 +127,12 @@ typedef enum {
 /////////////////////////////////////////////////////////////////////////////
 // Additional support data copied from Adafruit AS7341 library
 
-// SMUX configuration copied from Adafruit_AS7341::setup_F1F4_Clear_NIR()
 const uint8_t SMUX_config_size = 21;
+
+// SMUX configuration copied from Adafruit_AS7341::setup_F1F4_Clear_NIR()
 uint8_t SMUX_F1F4_Clear_NIR[SMUX_config_size] = {
-  // SMUX Config for F1,F2,F3,F4,NIR,Clear
   0x00, // Write starts at register zero
+  // SMUX Config for F1,F2,F3,F4,NIR,Clear
   0x30, // F3 left set to ADC2
   0x01, // F1 left set to ADC0
   0x00, // Reserved or disabled
@@ -149,6 +150,32 @@ uint8_t SMUX_F1F4_Clear_NIR[SMUX_config_size] = {
   0x00, // F6/F8 right disabled
   0x30, // F3 right connected to AD2
   0x01, // F1 right connected to AD0
+  0x50, // CLEAR right connected to AD4
+  0x00, // Reserved or disabled
+  0x06  // NIR connected to ADC5
+};
+
+// SMUX configuration copied from Adafruit_AS7341::setup_F5F8_Clear_NIR()
+uint8_t SMUX_F5F8_Clear_NIR[SMUX_config_size] = {
+  0x00, // Write starts at register zero
+  // SMUX Config for F5,F6,F7,F8,NIR,Clear
+  0x00, // F3 left disable
+  0x00, // F1 left disable
+  0x00, // reserved/disable
+  0x40, // F8 left connected to ADC3
+  0x02, // F6 left connected to ADC1
+  0x00, // F4/ F2 disabled
+  0x10, // F5 left connected to ADC0
+  0x03, // F7 left connected to ADC2
+  0x50, // CLEAR Connected to ADC4
+  0x10, // F5 right connected to ADC0
+  0x03, // F7 right connected to ADC2
+  0x00, // Reserved or disabled
+  0x00, // F2 right disabled
+  0x00, // F4 right disabled
+  0x24, // F8 right connected to ADC2/ F6 right connected to ADC1
+  0x00, // F3 right disabled
+  0x00, // F1 right disabled
   0x50, // CLEAR right connected to AD4
   0x00, // Reserved or disabled
   0x06  // NIR connected to ADC5
@@ -239,9 +266,9 @@ uint8_t blocking_read(uint8_t i2c_address, uint8_t register_id, uint8_t length) 
   return async_status;
 }
 
+// Check for timeout during waits for asynchronous operation
 const unsigned long async_timeout = 1000; // 1 second
 unsigned long async_read_start;
-// Check for timeout during waits for asynchronous operation
 bool asyncTimeOutCheck() {
   if (millis() < async_read_start) {
     Serial.println("Timeout counter overflow, resetting");
@@ -320,7 +347,6 @@ uint8_t async_read(uint8_t i2c_address, uint8_t register_id, uint8_t length) {
   return async_status;
 }
 
-
 // Write a byte to specified register
 // Reviewing twi_nonblock code, looks like this is technically a blocking
 // operation but a single write is pretty fast and hasn't caused problems. (yet?)
@@ -335,7 +361,8 @@ uint8_t register_write_byte(uint8_t i2c_address, uint8_t register_id, uint8_t re
 // AS7341-specific code
 
 // AS7341 initial setup: queries chip for its product number and wake it up
-// from default SLEEP mode to IDLE. Uses blocking I2C communication.
+// from default SLEEP mode to IDLE. Then proceed to set additional
+// configuration registers. Uses blocking I2C communication.
 void as7341Setup() {
   uint8_t retVal;
   uint8_t revision;
