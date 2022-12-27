@@ -52,11 +52,13 @@ uint8_t currentNote;
 // Declarations supporting utility functions calling into Mozzi twi_nonblock
 
 static volatile uint8_t async_status;
-#define ASYNC_IDLE 0
-#define ASYNC_READING 1
-#define ASYNC_WRITING 2
-#define ASYNC_COMPLETE 127
-#define ASYNC_ERROR 255
+typedef enum {
+  ASYNC_IDLE,
+  ASYNC_READING,
+  ASYNC_WRITING,
+  ASYNC_COMPLETE,
+  ASYNC_ERROR
+} async_states_enum;
 
 /////////////////////////////////////////////////////////////////////////////
 //
@@ -105,6 +107,9 @@ typedef enum {
   AS7341_SMUX_CMD_WRITE, ///< Write SMUX configuration from RAM to SMUX chain
 } as7341_smux_cmd_t;
 
+/////////////////////////////////////////////////////////////////////////////
+// Additional support data modified from Adafruit AS7341 library
+
 /**
  * @brief Spectral Channel specifiers for configuration and reading
  *
@@ -114,8 +119,6 @@ typedef enum {
   AS7341_CHANNEL_445nm_F2,
   AS7341_CHANNEL_480nm_F3,
   AS7341_CHANNEL_515nm_F4,
-  AS7341_CHANNEL_CLEAR_0,
-  AS7341_CHANNEL_NIR_0,
   AS7341_CHANNEL_555nm_F5,
   AS7341_CHANNEL_590nm_F6,
   AS7341_CHANNEL_630nm_F7,
@@ -123,9 +126,6 @@ typedef enum {
   AS7341_CHANNEL_CLEAR,
   AS7341_CHANNEL_NIR,
 } as7341_color_channel_t;
-
-/////////////////////////////////////////////////////////////////////////////
-// Additional support data copied from Adafruit AS7341 library
 
 const uint8_t SMUX_config_size = 21;
 
@@ -184,6 +184,15 @@ uint8_t SMUX_F5F8_Clear_NIR[SMUX_config_size] = {
 /////////////////////////////////////////////////////////////////////////////
 // Declarations supporting AS7341-specific code
 
+// Total integration time will be (ATIME + 1) * (ASTEP + 1) * 2.78µS
+// Datasheet: "typical integration time" is listed as 50ms (ATIME=29 ASTEP=599 50.04ms)
+// ATIME is an 8-bit unsigned value. All values 0-255 are valid
+// ASTEP is a 16-bit unsigned value. 0-65534 are valid, 65535 is reserved.
+// (ATIME + 1) * (ASTEP + 1) must not exceed 65535.
+const uint8_t ATIME=100;
+const uint16_t ASTEP=999;
+
+// State machine tracking progress through asynchrnous read operations
 static volatile uint8_t as7341_read_status;
 typedef enum {
   AS7341_READ_IDLE,
@@ -193,6 +202,15 @@ typedef enum {
   AS7341_READ_COMPLETE,
   AS7341_READ_ERROR
 } as7341_read_steps;
+
+// Tracking whether we're reading sensors F1-F4 or F5-F8.
+static volatile uint8_t as7341_sensor_group;
+typedef enum {
+  AS7341_SENSORS_IDLE,
+  AS7341_SENSORS_F1_F4,
+  AS7341_SENSORS_F5_F8,
+  AS7341_SENSORS_COMPLETE
+} as7341_sensor_groupings;
 
 // Mozzi twi_nonblock has its own internal memory for I2C data (twi_masterBuffer)
 // It has also allocated txBuffer and rxBuffer that it sometimes uses
@@ -206,8 +224,9 @@ uint8_t async_buffer[32];
 // eight bits of the byte at once, so we have to track what's going on.
 uint8_t as7341EnableRegister;
 
-// The most recent set of AS7341 sensor values
-uint16_t as7341Readings[12];
+// The most recent set of AS7341 sensor values: F1 to F8 + Clear + NIR
+// Can index into this array via as7341_color_channel_t
+uint16_t as7341Readings[10];
 
 /////////////////////////////////////////////////////////////////////////////
 // Utility functions for calling into Mozzi twi_nonblock
@@ -396,19 +415,17 @@ void as7341Setup() {
   as7341UpdateEnableRegister();
 
   // Configure integration time.
-  // Total integration time will be (ATIME + 1) * (ASTEP + 1) * 2.78µS
-  // Datasheet: "typical integration time" is listed as 50ms (ATIME=29 ASTEP=599 50.04ms)
-  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_ATIME, 100);
+  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_ATIME, ATIME);
   if (0 != retVal) {
     Serial.print("ERROR: Failed to set AS7341 sensor integration ATIME. ");
     Serial.println(retVal);
   }
-  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_ASTEP_L, (uint8_t)(999 & 0xFF));
+  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_ASTEP_L, (uint8_t)(ASTEP & 0xFF));
   if (0 != retVal) {
     Serial.print("ERROR: Failed to set AS7341 sensor integration ASTEP low byte. ");
     Serial.println(retVal);
   }
-  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_ASTEP_H, (uint8_t)((999>>8) & 0xFF));
+  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_ASTEP_H, (uint8_t)((ASTEP>>8) & 0xFF));
   if (0 != retVal) {
     Serial.print("ERROR: Failed to set AS7341 sensor integration ASTEP high byte. ");
     Serial.println(retVal);
@@ -424,6 +441,7 @@ void as7341Setup() {
 
   // Configuration complete, we are ready to start reading sensor
   as7341_read_status = AS7341_READ_IDLE;
+  as7341_sensor_group = AS7341_SENSORS_F1_F4;
 }
 
 // Update AS7341 ENABLE register with our tracking value.
@@ -482,23 +500,23 @@ bool as7341SpectralValid(uint8_t status2register) {
   }
 }
 
-// Send AS7341 SMUX configuration to read F1-F4, Clear, and NIR sensors.
-void as7341SMUX_F1F4ClearNIR() {
-  uint8_t retVal = twi_writeToBlocking(AS7341_I2CADDR_DEFAULT, SMUX_F1F4_Clear_NIR, SMUX_config_size, true /* wait for completion */);
+// Send AS7341 SMUX configuration
+void as7341SendSMUXConfig(uint8_t* SMUX_config) {
+  uint8_t retVal = twi_writeToBlocking(AS7341_I2CADDR_DEFAULT, SMUX_config, SMUX_config_size, true /* wait for completion */);
   if (0 != retVal) {
-    Serial.print("ERROR: Failed to configure AS7341 SMUX for F1F4ClearNIR ");
+    Serial.print("ERROR: Failed to configure SMUX ");
     Serial.println(retVal);
   }
 }
 
 // Reads all channels of AS7341. Analogous to Adafruit_AS7341::readAllChannels
-void as7341ReadAllChannelsProcess() {
+void as7341ConfigureSMUXAndRead(uint8_t* SMUX_config) {
   switch(as7341_read_status) {
     case AS7341_READ_IDLE:
       // Disable spectral measurement then send SMUX configuration
       as7341EnableSpectralMeasurement(false);
       as7341SMUXWrite();
-      as7341SMUX_F1F4ClearNIR();
+      as7341SendSMUXConfig(SMUX_config);
       as7341SMUXEnable();
       as7341_read_status = AS7341_READ_SMUX;
       break;
@@ -530,13 +548,6 @@ void as7341ReadAllChannelsProcess() {
       // Read 12 bytes (6 16-bit spectral sensor values) from AS7341_CH0_DATA_L
       async_read(AS7341_I2CADDR_DEFAULT, AS7341_CH0_DATA_L, 12);
       if (ASYNC_COMPLETE == async_status) {
-        for(int i = 0; i < 6; i++) {
-          as7341Readings[i] = async_buffer[(i*2)] + (async_buffer[(i*2)+1]<<8);
-          Serial.print(as7341Readings[i]);
-          Serial.print("\t");
-        }
-        Serial.println();
-
         async_status = ASYNC_IDLE;
         as7341_read_status = AS7341_READ_COMPLETE;
       }
@@ -552,6 +563,51 @@ void as7341ReadAllChannelsProcess() {
       Serial.println(as7341_read_status);
       break;
   }
+}
+
+// Reads all channels of AS7341. Analogous to Adafruit_AS7341::readAllChannels
+void as7341ReadAllChannels() {
+  switch(as7341_sensor_group) {
+    case AS7341_SENSORS_IDLE:
+      as7341_sensor_group = AS7341_SENSORS_F1_F4;
+      // Fall through to case AS7341_SENSORS_F1_F4:
+    case AS7341_SENSORS_F1_F4:
+      as7341ConfigureSMUXAndRead(SMUX_F1F4_Clear_NIR);
+      if (AS7341_READ_COMPLETE == as7341_read_status) {
+        // Last two are Clear and NIR which are duplicated
+        for(int i = 0; i < 4; i++) {
+          as7341Readings[i] = async_buffer[(i*2)] + (async_buffer[(i*2)+1]<<8);
+        }
+        as7341_read_status = AS7341_READ_IDLE;
+        as7341_sensor_group = AS7341_SENSORS_F5_F8;
+      }
+      break;
+    case AS7341_SENSORS_F5_F8:
+      as7341ConfigureSMUXAndRead(SMUX_F5F8_Clear_NIR);
+      if (AS7341_READ_COMPLETE == as7341_read_status) {
+        for(int i = 0; i < 6; i++) {
+          as7341Readings[i+4] = async_buffer[(i*2)] + (async_buffer[(i*2)+1]<<8);
+        }
+        as7341_read_status = AS7341_READ_IDLE;
+        as7341_sensor_group = AS7341_SENSORS_COMPLETE;
+      }
+      break;
+    case AS7341_SENSORS_COMPLETE:
+      // Do nothing until caller resets to AS7341_SENSORS_IDLE
+      break;
+    default:
+      Serial.println("ERROR: Unexpected state in as7341_sensor_group");
+      break;
+  }
+}
+
+// Print full set of spectral sensor readings on a compact single line
+void as7341PrintReadings() {
+  for(int i = 0; i < 10; i++) {
+    Serial.print("\t");
+    Serial.print(as7341Readings[i]);
+  }
+  Serial.println();
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -571,12 +627,12 @@ void updateControl(){
     aSin.setFreq(scale4[currentNote++]);
     currentNote = currentNote % 8;
     nextUpdate = millis() + 500;
-
   }
-  if (AS7341_READ_COMPLETE == as7341_read_status) {
-    as7341_read_status = AS7341_READ_IDLE;
+  as7341ReadAllChannels();
+  if (AS7341_SENSORS_COMPLETE == as7341_sensor_group) {
+    as7341PrintReadings();
+    as7341_sensor_group = AS7341_SENSORS_IDLE;
   }
-  as7341ReadAllChannelsProcess();
 }
 
 // Update audio signal (standard Mozzi callback)
