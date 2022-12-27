@@ -78,6 +78,7 @@ typedef enum {
 #define AS7341_CFG6 0xAF         ///< Used to configure Smux
 #define AS7341_STATUS2 0xA3      ///< Measurement status flags; saturation, validity
 #define AS7341_CH0_DATA_L 0x95   ///< ADC Channel Data
+#define AS7341_CFG8 0xB1         ///< AGC enable and FIFO threshold
 
 /**
  * @brief Allowable gain multipliers for `setGain`
@@ -386,6 +387,7 @@ void as7341Setup() {
   uint8_t retVal;
   uint8_t revision;
   uint8_t part_number;
+  uint8_t register_cfg8;
 
   // Read two bytes: start at AS7341_REVID and AS7341_WHOAMI immediately after
   retVal = blocking_read(AS7341_I2CADDR_DEFAULT, AS7341_REVID, 2);
@@ -395,7 +397,7 @@ void as7341Setup() {
     return;
   }
 
-  // Datasheet: REF_ID are bits 2:0 in register AS7341_REVID (0x91)
+  // Datasheet: REV_ID are bits 2:0 in register AS7341_REVID (0x91)
   revision = async_buffer[0] & 0x03;
 
   // Datasheet: Part number is AS7341_CHIP_ID 001001 (0x09) stored in
@@ -431,12 +433,25 @@ void as7341Setup() {
     Serial.println(retVal);
   }
 
-  // Configure sensor gain.
-  // TODO: Figure out how auto-gain control works on this sensor
-  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_CFG1, AS7341_GAIN_256X);
-  if (0 != retVal) {
-    Serial.print("ERROR: Failed to configure AS7341 sensor gain. ");
-    Serial.println(retVal);
+  // Activate spectral auto gain control
+  retVal = blocking_read(AS7341_I2CADDR_DEFAULT, AS7341_CFG8, 1);
+  if (ASYNC_ERROR == retVal) {
+    Serial.println("ERROR: Failed to retrieve CFG8.");
+    return;
+  } else {
+    register_cfg8 = async_buffer[0];
+
+    if (register_cfg8 & 0b00000100) {
+      Serial.println("Spectral AGC already enabled.");
+    } else {
+      // Enable spectral AGC
+      register_cfg8 |= 0b00000100;
+      retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_CFG8, register_cfg8);
+      if (0 != retVal) {
+        Serial.print("ERROR: Failed to enable auto gain control ");
+        Serial.println(retVal);
+      }
+    }
   }
 
   // Configuration complete, we are ready to start reading sensor
@@ -631,6 +646,8 @@ void updateControl(){
   as7341ReadAllChannels();
   if (AS7341_SENSORS_COMPLETE == as7341_sensor_group) {
     as7341PrintReadings();
+    // Reset to IDLE so as7341ReadAllChannels() will start a new reading
+    // the next time it is called.
     as7341_sensor_group = AS7341_SENSORS_IDLE;
   }
 }
