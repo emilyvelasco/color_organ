@@ -502,23 +502,6 @@ void as7341SMUXEnable() {
   as7341UpdateEnableRegister();
 }
 
-// Check ENABLE register value to see if SMUX Enable bit is set.
-bool as7341SMUXEnableBitSet(uint8_t enableRegister) {
-  if (enableRegister & 0b00010000) {
-    return true;
-  } else {
-    return false;
-  }
-}
-
-// Check STATUS2 register value to see if Spectral Valid bit is set.
-bool as7341SpectralValid(uint8_t status2register) {
-  if (status2register & 0b01000000) {
-    return true;
-  } else {
-    return false;
-  }
-}
 
 // Send AS7341 SMUX configuration
 void as7341SendSMUXConfig(uint8_t* SMUX_config) {
@@ -548,7 +531,8 @@ void as7341ConfigureSMUXAndRead(uint8_t* SMUX_config) {
       // Read ENABLE register to see SMUX status
       async_read(AS7341_I2CADDR_DEFAULT, AS7341_ENABLE, 1);
       if (ASYNC_COMPLETE == async_status) {
-        if (!as7341SMUXEnableBitSet(async_buffer[0])) {
+        // Check ENABLE register value to see if SMUX Enable bit has been cleared.
+        if (!(async_buffer[0] & 0b00010000)) {
           // SMUX ready, update register value and start a read!
           as7341EnableRegister = async_buffer[0];
           as7341EnableSpectralMeasurement(true);
@@ -561,7 +545,8 @@ void as7341ConfigureSMUXAndRead(uint8_t* SMUX_config) {
       // Read STATUS2 register to see if data is ready
       async_read(AS7341_I2CADDR_DEFAULT, AS7341_STATUS2, 1);
       if (ASYNC_COMPLETE == async_status) {
-        if (as7341SpectralValid(async_buffer[0])) {
+        // Check STATUS2 register value to see if Spectral Valid bit is set.
+        if (async_buffer[0] & 0b01000000) {
           // Spectrum is valid, move on to retrieve that data.
           as7341_read_status = AS7341_READ_DATA;
         }
@@ -590,6 +575,17 @@ void as7341ConfigureSMUXAndRead(uint8_t* SMUX_config) {
 }
 
 // Reads all channels of AS7341. Analogous to Adafruit_AS7341::readAllChannels
+//
+// Uses non-blocking asynchronous I2C calls for reading data. Caller needs to
+// call this method repeatedly (from updateControl() or similar function.)
+// After calling this method, caller should check as7341_read_status to see if
+// it is AS7341_SENSORS_COMPLETE. If so, the sensor values are available in
+// as7341Readings[] for further processing, which can be indexed via the enum
+// as7341_color_channel_t. (Example: as7341Readings[AS7341_CHANNEL_480nm_F3] )
+// 
+// Once as7341_read_status is AS7341_SENSORS_COMPLETE, further calls will do
+// nothing waiting for the caller to complete their work. Once the caller is
+// ready to start a new read, set as7341_read_status = AS7341_SENSORS_IDLE
 void as7341ReadAllChannels() {
   if (AS7341_READ_ERROR == as7341_read_status) {
     as7341_sensor_group = AS7341_SENSORS_ERROR;
@@ -672,6 +668,7 @@ void updateControl(){
     // the next time it is called.
     as7341_sensor_group = AS7341_SENSORS_IDLE;
   } else if (AS7341_SENSORS_ERROR == as7341_sensor_group) {
+    Serial.println("AS7341_SENSORS_ERROR, retrying");
     // Oh no! Encountered a problem. Reset and try again.
     as7341_sensor_group = AS7341_SENSORS_IDLE;
   }
@@ -699,16 +696,18 @@ void setup() {
   while (!Serial) {
     delay(1);
   }
-  Serial.println("Serial online");
 
-  aSin.setFreq(440);
+  // Start Mozzi sine wave
+  aSin.setFreq(scale4[0]);
   startMozzi(CONTROL_RATE);
-  Serial.println("Mozzi online");
 
+  // Initialize nonblocking I2C library
   async_status = ASYNC_IDLE;
   initialize_twi_nonblock();
-  Serial.println("twi_nonblock initialized");
 
+  // Initialize AS7341 spectral sensor
+  as7341_read_status = AS7341_READ_IDLE;
+  as7341_sensor_group = AS7341_SENSORS_IDLE;
   as7341Setup();
 
   Serial.println("Setup complete");
