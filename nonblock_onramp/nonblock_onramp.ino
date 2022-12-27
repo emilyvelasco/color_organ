@@ -120,6 +120,7 @@ static volatile uint8_t async_status;
 #define ASYNC_IDLE 0
 #define ASYNC_READING 1
 #define ASYNC_WRITING 2
+#define ASYNC_COMPLETE 127
 #define ASYNC_ERROR 255
 
 // SMUX configuration copied from Adafruit_AS7341::setup_F1F4_Clear_NIR()
@@ -177,8 +178,8 @@ typedef enum {
 // It has also allocated txBuffer and rxBuffer that it sometimes uses
 // internally and sometimes used externally by sample code. When is it OK for
 // external code to use txBuffer/rxBuffer? I'm not sure so I'm allocating
-// my own asyncBuffer.
-uint8_t asyncBuffer[32];
+// my own async_buffer.
+uint8_t async_buffer[32];
 
 // Perform a blocking read from register_id of device at i2c_address.
 //
@@ -188,8 +189,8 @@ uint8_t asyncBuffer[32];
 //    read operation.
 uint8_t blocking_read(uint8_t i2c_address, uint8_t register_id, uint8_t length) {
   // Send address of register where we want to start reading
-  asyncBuffer[0] = register_id;
-  twi_initiateWriteTo(i2c_address, asyncBuffer, 1);
+  async_buffer[0] = register_id;
+  twi_initiateWriteTo(i2c_address, async_buffer, 1);
 
   // Wait for register address write to complete.
   async_status = ASYNC_WRITING;
@@ -218,7 +219,7 @@ uint8_t blocking_read(uint8_t i2c_address, uint8_t register_id, uint8_t length) 
   while (ASYNC_READING == async_status) {
     if (TWI_MRX != twi_state) {
       // Read operation completed, copy data
-      uint8_t available = twi_readMasterBuffer(asyncBuffer, length);
+      uint8_t available = twi_readMasterBuffer(async_buffer, length);
 
       if (available != length) {
         Serial.print("ERROR: Wanted ");
@@ -233,6 +234,66 @@ uint8_t blocking_read(uint8_t i2c_address, uint8_t register_id, uint8_t length) 
 
   return async_status;
 }
+
+// State machine to handle a single asynchronous read. Supports only a single
+// read operation at any given time. Current state is tracked in global variable
+// async_status. Caller should call this frequently and check for the following
+// two end states in async_status:
+//   * ASYNC_COMPLETE = data has successfully been read into async_buffer.
+//   * ASYNC_ERROR = read operation failed for some reason.
+// Once in either end state, this function would do nothing until the caller
+// wants a new operation. To do so, set async_status to ASYNC_IDLE and call
+// this method again to start a new read.
+uint8_t async_read(uint8_t i2c_address, uint8_t register_id, uint8_t length) {
+  switch (async_status) {
+    case ASYNC_IDLE:
+      // Send address of register where we want to start reading
+      async_buffer[0] = register_id;
+      twi_initiateWriteTo(i2c_address, async_buffer, 1);
+      async_status = ASYNC_WRITING;
+      break;
+    case ASYNC_WRITING:
+      if ( TWI_MTX != twi_state ){
+        // Register address write completed, start read operation
+        uint8_t retVal = twi_initiateReadFrom(i2c_address, length);
+
+        if (retVal != 0) {
+          Serial.print("ERROR: twi_initiateReadFrom failed with ");
+          Serial.println(retVal);
+          async_status = ASYNC_ERROR;
+        } else {
+          async_status = ASYNC_READING;
+        }
+      }
+      break;
+    case ASYNC_READING:
+      if (TWI_MRX != twi_state) {
+        // Read operation completed, copy data
+        uint8_t available = twi_readMasterBuffer(async_buffer, length);
+
+        if (available != length) {
+          Serial.print("ERROR: Wanted ");
+          Serial.print(length);
+          Serial.print(" bytes but only read ");
+          Serial.print(available);
+          async_status = ASYNC_ERROR;
+        }
+        async_status = ASYNC_COMPLETE;
+      }
+      break;
+    case ASYNC_COMPLETE:
+    case ASYNC_ERROR:
+      // Do nothing until caller handles the situation and sets ASYNC_IDLE
+      break;
+    default:
+      Serial.print("ERROR: Unexpected state encountered for async_read: ");
+      Serial.println(async_status);
+      break;
+  }
+
+  return async_status;
+}
+
 
 // Write a byte to specified register
 // Reviewing twi_nonblock code, looks like this is technically a blocking
@@ -268,11 +329,11 @@ void as7341Setup() {
   }
 
   // Datasheet: REF_ID are bits 2:0 in register AS7341_REVID (0x91)
-  revision = asyncBuffer[0] & 0x03;
+  revision = async_buffer[0] & 0x03;
 
   // Datasheet: Part number is AS7341_CHIP_ID 001001 (0x09) stored in
   // bits 7:2 of register AS7341_WHOAMI (0x92) = 0b 0010 01xx
-  part_number = asyncBuffer[1] >> 2;
+  part_number = async_buffer[1] >> 2;
 
   if (AS7341_CHIP_ID != part_number) {
     Serial.print("ERROR: Expected to find part number AS7341_CHIP_ID (0x09) but found ");
@@ -289,17 +350,17 @@ void as7341Setup() {
   // Configure integration time.
   // Total integration time will be (ATIME + 1) * (ASTEP + 1) * 2.78µS
   // Datasheet: "typical integration time" is listed as 50ms (ATIME=29 ASTEP=599 50.04ms)
-  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_ATIME, 29);
+  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_ATIME, 100);
   if (0 != retVal) {
     Serial.print("ERROR: Failed to set AS7341 sensor integration ATIME. ");
     Serial.println(retVal);
   }
-  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_ASTEP_L, (uint8_t)(599 & 0xFF));
+  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_ASTEP_L, (uint8_t)(999 & 0xFF));
   if (0 != retVal) {
     Serial.print("ERROR: Failed to set AS7341 sensor integration ASTEP low byte. ");
     Serial.println(retVal);
   }
-  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_ASTEP_H, (uint8_t)((599>>8) & 0xFF));
+  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_ASTEP_H, (uint8_t)((999>>8) & 0xFF));
   if (0 != retVal) {
     Serial.print("ERROR: Failed to set AS7341 sensor integration ASTEP high byte. ");
     Serial.println(retVal);
@@ -355,6 +416,7 @@ void as7341SMUXEnable() {
   as7341UpdateEnableRegister();
 }
 
+// Check ENABLE register value to see if SMUX Enable bit is set.
 bool as7341SMUXEnableBitSet(uint8_t enableRegister) {
   if (enableRegister & 0b00010000) {
     return true;
@@ -363,6 +425,7 @@ bool as7341SMUXEnableBitSet(uint8_t enableRegister) {
   }
 }
 
+// Check STATUS2 register value to see if Spectral Valid bit is set.
 bool as7341SpectralValid(uint8_t status2register) {
   if (status2register & 0b01000000) {
     return true;
@@ -380,6 +443,7 @@ void as7341SMUX_F1F4ClearNIR() {
   }
 }
 
+// Check for timeout during waits for asynchronous operation
 bool asyncTimeOutCheck() {
   if (millis() < as7341_read_start) {
     Serial.println("Timeout counter overflow, resetting");
@@ -396,6 +460,7 @@ bool asyncTimeOutCheck() {
   return false;
 }
 
+// Reads all channels of AS7341. Analogous to Adafruit_AS7341::readAllChannels
 void as7341ReadAllChannelsProcess() {
   uint8_t retVal;
   uint8_t available;
@@ -411,8 +476,8 @@ void as7341ReadAllChannelsProcess() {
       break;
     case AS7341_READ_QUERY_SMUX_1_ADDR:
       // Read ENABLE register to see SMUX status
-      asyncBuffer[0] = AS7341_ENABLE;
-      twi_initiateWriteTo(AS7341_I2CADDR_DEFAULT, asyncBuffer, 1);
+      async_buffer[0] = AS7341_ENABLE;
+      twi_initiateWriteTo(AS7341_I2CADDR_DEFAULT, async_buffer, 1);
       as7341_read_start = millis();
       as7341_read_status = AS7341_READ_QUERY_SMUX_1_ADDR_WAIT;
       break;
@@ -444,7 +509,7 @@ void as7341ReadAllChannelsProcess() {
       break;
     case AS7341_READ_QUERY_SMUX_1_COPY:
       // Current ENABLE register value retrieved, let's look at it.
-      available = twi_readMasterBuffer(asyncBuffer, 1);
+      available = twi_readMasterBuffer(async_buffer, 1);
 
       if (available != 1) {
         Serial.print("ERROR: Wanted 1 ENABLE byte but read ");
@@ -453,20 +518,20 @@ void as7341ReadAllChannelsProcess() {
         break;
       }
 
-      if (as7341SMUXEnableBitSet(asyncBuffer[0])) {
+      if (as7341SMUXEnableBitSet(async_buffer[0])) {
         // SMUX not ready yet, read ENABLE again.
         as7341_read_status = AS7341_READ_QUERY_SMUX_1_ADDR;
       } else {
         // SMUX ready, update register value and start a read!
-        as7341EnableRegister = asyncBuffer[0];
+        as7341EnableRegister = async_buffer[0];
         as7341EnableSpectralMeasurement(true);
         as7341_read_status = AS7341_READ_QUERY_READY_1_ADDR;
       }
       break;
     case AS7341_READ_QUERY_READY_1_ADDR:
       // Read STATUS2 register to see if data is ready
-      asyncBuffer[0] = AS7341_STATUS2;
-      twi_initiateWriteTo(AS7341_I2CADDR_DEFAULT, asyncBuffer, 1);
+      async_buffer[0] = AS7341_STATUS2;
+      twi_initiateWriteTo(AS7341_I2CADDR_DEFAULT, async_buffer, 1);
       as7341_read_start = millis();
       as7341_read_status = AS7341_READ_QUERY_READY_1_ADDR_WAIT;
       break;
@@ -498,7 +563,7 @@ void as7341ReadAllChannelsProcess() {
       break;
     case AS7341_READ_QUERY_READY_1_COPY:
       // Current STATUS2 register value retrieved, let's look at it.
-      available = twi_readMasterBuffer(asyncBuffer, 1);
+      available = twi_readMasterBuffer(async_buffer, 1);
 
       if (available != 1) {
         Serial.print("ERROR: Wanted 1 STATUS2 byte but read ");
@@ -507,69 +572,36 @@ void as7341ReadAllChannelsProcess() {
         break;
       }
 
-      if (as7341SpectralValid(asyncBuffer[0])) {
+      if (as7341SpectralValid(async_buffer[0])) {
         // Spectrum is valid, move on to retrieve that data.
         as7341_read_status = AS7341_READ_DATA_1_ADDR;
+        if (ASYNC_IDLE != async_status) {
+          Serial.println("ERROR: No async_read operation should be in progress.");
+          break;
+        }
       } else {
         // Spectrum is not yet ready, re-read STATUS2
         as7341_read_status = AS7341_READ_QUERY_READY_1_ADDR;
       }
       break;
     case AS7341_READ_DATA_1_ADDR:
-      // Read spectral data starting at AS7341_CH0_DATA_L
-      asyncBuffer[0] = AS7341_CH0_DATA_L;
-      twi_initiateWriteTo(AS7341_I2CADDR_DEFAULT, asyncBuffer, 1);
-      as7341_read_start = millis();
-      as7341_read_status = AS7341_READ_DATA_1_ADDR_WAIT;
-      break;
-    case AS7341_READ_DATA_1_ADDR_WAIT:
-      // Waiting for address write to complete
-      if ( TWI_MTX != twi_state ){
-        as7341_read_status = AS7341_READ_DATA_1_READ;
-      }
-      asyncTimeOutCheck();
-      break;
-    case AS7341_READ_DATA_1_READ:
-      // Address write complete, initiate read operation
-      retVal = twi_initiateReadFrom(AS7341_I2CADDR_DEFAULT, 12);
+      async_read(AS7341_I2CADDR_DEFAULT, AS7341_CH0_DATA_L, 12);
+      if (ASYNC_COMPLETE == async_status) {
+        for(int i = 0; i < 12; i++) {
+          Serial.print(async_buffer[i],HEX);
+          Serial.print("\t");
+        }
+        Serial.println();
+        for(int i = 0; i < 6; i++) {
+          as7341Readings[i] = async_buffer[(i*2)] + (async_buffer[(i*2)+1]<<8);
+          Serial.print(as7341Readings[i]);
+          Serial.print("\t\t");
+        }
+        Serial.println();
 
-      if (retVal != 0) {
-        Serial.print("ERROR: twi_initiateReadFrom failed with ");
-        Serial.println(retVal);
-        as7341_read_status = AS7341_READ_ERROR;
-      } else {
-        as7341_read_status = AS7341_READ_DATA_1_READ_WAIT;
+        async_status = ASYNC_IDLE;
+        as7341_read_status = AS7341_READ_COMPLETE;
       }
-      break;
-    case AS7341_READ_DATA_1_READ_WAIT:
-      // Waiting for read operation to complete
-      if (TWI_MRX != twi_state) {
-        as7341_read_status = AS7341_READ_DATA_1_COPY;
-      }
-      asyncTimeOutCheck();
-      break;
-    case AS7341_READ_DATA_1_COPY:
-      // Spectrum values retrieved
-      available = twi_readMasterBuffer(asyncBuffer, 12);
-
-      if (available != 12) {
-        Serial.print("ERROR: Wanted 12 bytes of spectrum data but read ");
-        Serial.print(available);
-        as7341_read_status = AS7341_READ_ERROR;
-        break;
-      }
-
-      for(int i = 0; i < 6; i++) {
-        as7341Readings[i] = (uint16_t)(asyncBuffer[(i*2)]) +
-          ((uint16_t)(asyncBuffer[(i*2)+1]))<<8;
-        Serial.print(i);
-        Serial.print(" ");
-        Serial.print(as7341Readings[i]);
-        Serial.print(" ");
-      }
-      Serial.println();
-
-      as7341_read_status = AS7341_READ_COMPLETE;
       break;
     case AS7341_READ_COMPLETE:
       // Sensor read and waiting for reset to AS7341_READ_IDLE
