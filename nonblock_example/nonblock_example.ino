@@ -405,9 +405,9 @@ uint8_t register_write_byte(uint8_t i2c_address, uint8_t register_id, uint8_t re
 /////////////////////////////////////////////////////////////////////////////
 // AS7341-specific code
 
-// AS7341 initial setup: queries chip for its product number and wake it up
-// from default SLEEP mode to IDLE. Then proceed to set additional
-// configuration registers. Uses blocking I2C communication.
+// AS7341 initial setup: queries chip for its product number and, if it
+// matches expectation, set additional configuration registers. Uses
+// blocking I2C communication.
 void as7341Setup() {
   uint8_t retVal;
   uint8_t revision;
@@ -429,8 +429,8 @@ void as7341Setup() {
   part_number = async_buffer[1] >> 2;
 
   if (AS7341_CHIP_ID != part_number) {
-    Serial.print("ERROR: Expected to find part number AS7341_CHIP_ID (0x09) but found ");
-    Serial.println(part_number);
+    Serial.print("ERROR: Expected to find part number (0x09) but found ");
+    Serial.println(part_number, HEX);
     return;
   }
   Serial.print("Successfully connected to AS7341 revision ");
@@ -441,24 +441,28 @@ void as7341Setup() {
   as7341UpdateEnableRegister();
 
   // Configure integration time.
-  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_ATIME, ATIME);
+  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT,
+    AS7341_ATIME, ATIME);
   if (0 != retVal) {
     Serial.print("ERROR: Failed to set AS7341 sensor integration ATIME. ");
     Serial.println(retVal);
   }
-  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_ASTEP_L, (uint8_t)(ASTEP & 0xFF));
+  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT,
+    AS7341_ASTEP_L, (uint8_t)(ASTEP & 0xFF));
   if (0 != retVal) {
     Serial.print("ERROR: Failed to set AS7341 sensor integration ASTEP low byte. ");
     Serial.println(retVal);
   }
-  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_ASTEP_H, (uint8_t)((ASTEP>>8) & 0xFF));
+  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT,
+    AS7341_ASTEP_H, (uint8_t)((ASTEP>>8) & 0xFF));
   if (0 != retVal) {
     Serial.print("ERROR: Failed to set AS7341 sensor integration ASTEP high byte. ");
     Serial.println(retVal);
   }
 
   // Configure sensor gain.
-  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_CFG1, AS7341_GAIN_256X);
+  retVal = register_write_byte(AS7341_I2CADDR_DEFAULT,
+    AS7341_CFG1, AS7341_GAIN_256X);
   if (0 != retVal) {
     Serial.print("ERROR: Failed to configure AS7341 sensor gain. ");
     Serial.println(retVal);
@@ -471,7 +475,8 @@ void as7341Setup() {
 
 // Update AS7341 ENABLE register with our tracking value.
 void as7341UpdateEnableRegister() {
-  uint8_t retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_ENABLE, as7341EnableRegister);
+  uint8_t retVal = register_write_byte(AS7341_I2CADDR_DEFAULT,
+    AS7341_ENABLE, as7341EnableRegister);
   if (0 != retVal) {
     Serial.print("ERROR: Failed to update AS7341 enable register to ");
     Serial.print(as7341EnableRegister);
@@ -480,7 +485,7 @@ void as7341UpdateEnableRegister() {
   }
 }
 
-// Reads all channels of AS7341. Analogous to Adafruit_AS7341::readAllChannels
+// Reconfigure SMUX to the given information and read all six 16-bit ADCs
 void as7341ConfigureSMUXAndRead(uint8_t* SMUX_config) {
   uint8_t retVal;
 
@@ -495,7 +500,8 @@ void as7341ConfigureSMUXAndRead(uint8_t* SMUX_config) {
       as7341UpdateEnableRegister();
 
       // Tell AS7341 that SMUX configuration data is coming.
-      retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_CFG6, (AS7341_SMUX_CMD_WRITE << 3));
+      retVal = register_write_byte(AS7341_I2CADDR_DEFAULT,
+        AS7341_CFG6, (AS7341_SMUX_CMD_WRITE << 3));
       if (0 != retVal) {
         Serial.print("ERROR: Failed to configure AS7341 SMUX for writing ");
         Serial.println(retVal);
@@ -503,8 +509,10 @@ void as7341ConfigureSMUXAndRead(uint8_t* SMUX_config) {
         break;
       }
 
-      // Send AS7341 SMUX configuration
-      retVal = twi_writeToBlocking(AS7341_I2CADDR_DEFAULT, SMUX_config, SMUX_config_size, true /* wait for completion */);
+      // Send AS7341 SMUX configuration. This is a blocking call but hasn't
+      // caused problems (yet?)
+      retVal = twi_writeToBlocking(AS7341_I2CADDR_DEFAULT,
+        SMUX_config, SMUX_config_size, true /* wait for completion */);
       if (0 != retVal) {
         Serial.print("ERROR: Failed to configure SMUX ");
         Serial.println(retVal);
