@@ -467,7 +467,7 @@ void as7341EnableSpectralMeasurement(bool enable_measurement) {
 
 // Tell AS7341 that SMUX configuration data is coming.
 void as7341SMUXWrite() {
-  uint8_t retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_SMUX_CMD_WRITE, (AS7341_SMUX_CMD_WRITE << 3));
+  uint8_t retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_CFG6, (AS7341_SMUX_CMD_WRITE << 3));
   if (0 != retVal) {
     Serial.print("ERROR: Failed to configure AS7341 SMUX for writing ");
     Serial.println(retVal);
