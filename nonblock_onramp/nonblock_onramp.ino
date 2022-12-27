@@ -26,6 +26,9 @@
 #include <tables/sin2048_int8.h>  // a wavetable holding a sine wave
 #include <twi_nonblock.h>
 
+/////////////////////////////////////////////////////////////////////////////
+// Declarations supporting Mozzi audio generation
+
 // I expected these to be in Mozzi library somewhere but I failed to find it.
 const int note_C4 = mtof(60);
 const int note_D4 = mtof(62);
@@ -46,9 +49,19 @@ unsigned long nextUpdate;
 uint8_t currentNote;
 
 /////////////////////////////////////////////////////////////////////////////
+// Declarations supporting utility functions calling into Mozzi twi_nonblock
+
+static volatile uint8_t async_status;
+#define ASYNC_IDLE 0
+#define ASYNC_READING 1
+#define ASYNC_WRITING 2
+#define ASYNC_COMPLETE 127
+#define ASYNC_ERROR 255
+
+/////////////////////////////////////////////////////////////////////////////
 //
 // AS7341 constants copied from Adafruit_AS7341.h
-//
+
 #define AS7341_I2CADDR_DEFAULT 0x39 ///< AS7341 default i2c address
 #define AS7341_CHIP_ID 0x09         ///< AS7341 default device id from WHOAMI
 #define AS7341_REVID 0x91           ///< Chip revision register
@@ -110,18 +123,9 @@ typedef enum {
   AS7341_CHANNEL_CLEAR,
   AS7341_CHANNEL_NIR,
 } as7341_color_channel_t;
-//
-// End of excerpt directly copied from Adafruit_AS7341.h
-//
-/////////////////////////////////////////////////////////////////////////////
 
-// Utility functions calling into Mozzi twi_nonblock
-static volatile uint8_t async_status;
-#define ASYNC_IDLE 0
-#define ASYNC_READING 1
-#define ASYNC_WRITING 2
-#define ASYNC_COMPLETE 127
-#define ASYNC_ERROR 255
+/////////////////////////////////////////////////////////////////////////////
+// Additional support data copied from Adafruit AS7341 library
 
 // SMUX configuration copied from Adafruit_AS7341::setup_F1F4_Clear_NIR()
 const uint8_t SMUX_config_size = 21;
@@ -150,6 +154,9 @@ uint8_t SMUX_F1F4_Clear_NIR[SMUX_config_size] = {
   0x06  // NIR connected to ADC5
 };
 
+/////////////////////////////////////////////////////////////////////////////
+// Declarations supporting AS7341-specific code
+
 static volatile uint8_t as7341_read_status;
 typedef enum {
   AS7341_READ_IDLE,
@@ -161,12 +168,22 @@ typedef enum {
 } as7341_read_steps;
 
 // Mozzi twi_nonblock has its own internal memory for I2C data (twi_masterBuffer)
-//
 // It has also allocated txBuffer and rxBuffer that it sometimes uses
 // internally and sometimes used externally by sample code. When is it OK for
 // external code to use txBuffer/rxBuffer? I'm not sure so I'm allocating
 // my own async_buffer.
 uint8_t async_buffer[32];
+
+// Register AS7341_ENABLE (0x80) has multiple flags that are set/cleared
+// for different operations. But reading and writing has to be done all
+// eight bits of the byte at once, so we have to track what's going on.
+uint8_t as7341EnableRegister;
+
+// The most recent set of AS7341 sensor values
+uint16_t as7341Readings[12];
+
+/////////////////////////////////////////////////////////////////////////////
+// Utility functions for calling into Mozzi twi_nonblock
 
 // Perform a blocking read from register_id of device at i2c_address.
 //
@@ -199,7 +216,7 @@ uint8_t blocking_read(uint8_t i2c_address, uint8_t register_id, uint8_t length) 
   // Experimentally determined a tiny bit of delay is required between
   // twi_initiateReadFrom() and checking twi_state. In normal nonblocking
   // usage we would have handed control off to other code thus an explicit
-  // delay is not normally be needed.
+  // delay is not normally needed.
   delay(1);
 
   // Wait for read operation to complete
@@ -222,6 +239,7 @@ uint8_t blocking_read(uint8_t i2c_address, uint8_t register_id, uint8_t length) 
   return async_status;
 }
 
+const unsigned long async_timeout = 1000; // 1 second
 unsigned long async_read_start;
 // Check for timeout during waits for asynchronous operation
 bool asyncTimeOutCheck() {
@@ -231,7 +249,7 @@ bool asyncTimeOutCheck() {
     return false;
   }
 
-  if (millis() > async_read_start + 1000) {
+  if (millis() > async_read_start + async_timeout) {
     Serial.println("Async operation timed out.");
     async_status = ASYNC_ERROR;
     return true;
@@ -313,13 +331,8 @@ uint8_t register_write_byte(uint8_t i2c_address, uint8_t register_id, uint8_t re
   return twowire_endTransmission();
 }
 
-// Register AS7341_ENABLE (0x80) has multiple flags that are set/cleared
-// for different operations. But reading and writing has to be done all
-// eight bits of the byte at once, so we have to track what's going on.
-uint8_t as7341EnableRegister;
-
-// The most recent set of AS7341 sensor values
-uint16_t as7341Readings[12];
+/////////////////////////////////////////////////////////////////////////////
+// AS7341-specific code
 
 // AS7341 initial setup: queries chip for its product number and wake it up
 // from default SLEEP mode to IDLE. Uses blocking I2C communication.
@@ -514,6 +527,9 @@ void as7341ReadAllChannelsProcess() {
   }
 }
 
+/////////////////////////////////////////////////////////////////////////////
+// Mozzi callback functions
+
 // Update audio control (standard Mozzi callback)
 // This is called very frequently (*) but not as frequently as updateAudio()
 // This is where we can perform logic that usually lives in loop() of an
@@ -547,6 +563,9 @@ void updateControl(){
 int updateAudio(){
   return aSin.next();
 }
+
+/////////////////////////////////////////////////////////////////////////////
+// Arduino callback functions
 
 // One-time initial setup (standard Arduino boilerplate)
 void setup() {
