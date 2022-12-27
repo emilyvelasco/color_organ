@@ -510,7 +510,7 @@ void as7341ConfigureSMUXAndRead(uint8_t* SMUX_config) {
   }
   switch(as7341_read_status) {
     case AS7341_READ_IDLE:
-      // Disable spectral measurement then send SMUX configuration
+      // Disable spectral measurement before sending SMUX configuration
       as7341EnableRegister &= ~AS7341_ENABLE_SP_EN;
       as7341UpdateEnableRegister();
 
@@ -605,6 +605,7 @@ void as7341ConfigureSMUXAndRead(uint8_t* SMUX_config) {
 // ready to start a new read, set as7341_read_status = AS7341_SENSORS_IDLE
 void as7341ReadAllChannels() {
   if (AS7341_READ_ERROR == as7341_read_status) {
+    // Propagate error
     as7341_sensor_group = AS7341_SENSORS_ERROR;
   }
   switch(as7341_sensor_group) {
@@ -726,8 +727,6 @@ void setup() {
   as7341_read_status = AS7341_READ_IDLE;
   as7341_sensor_group = AS7341_SENSORS_IDLE;
   as7341Setup();
-
-  Serial.println("Setup complete");
 }
 
 // Endless loop (standard Arduino boilerplate)
