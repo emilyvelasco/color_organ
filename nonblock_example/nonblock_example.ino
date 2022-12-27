@@ -245,6 +245,11 @@ uint8_t async_buffer[32];
 // eight bits of the byte at once, so we have to track what's going on.
 uint8_t as7341EnableRegister;
 
+// Bits in AS7341_ENABLE
+const uint8_t AS7341_ENABLE_SMUXEN = 0b00010000;
+const uint8_t AS7341_ENABLE_SP_EN  = 0b00000010;
+const uint8_t AS7341_ENABLE_PON    = 0b00000001;
+
 // The most recent set of AS7341 sensor values: F1 to F8 + Clear + NIR
 // Can index into this array via as7341_color_channel_t
 uint16_t as7341Readings[10];
@@ -432,7 +437,7 @@ void as7341Setup() {
   Serial.println(revision);
 
   // AS7341 chip powers up to SLEEP, we have to bring it to IDLE
-  as7341EnableRegister = 0x01;
+  as7341EnableRegister = AS7341_ENABLE_PON;
   as7341UpdateEnableRegister();
 
   // Configure integration time.
@@ -475,45 +480,10 @@ void as7341UpdateEnableRegister() {
   }
 }
 
-// AS7341 spectral measurement needs to be disabled for SMUX configuration
-// and re-enabled for reading sensor.
-void as7341EnableSpectralMeasurement(bool enable_measurement) {
-  if (enable_measurement) {
-    as7341EnableRegister |= 0b00000010;
-  } else {
-    as7341EnableRegister &= 0b11111101;
-  }
-  as7341UpdateEnableRegister();
-}
-
-// Tell AS7341 that SMUX configuration data is coming.
-void as7341SMUXWrite() {
-  uint8_t retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_CFG6, (AS7341_SMUX_CMD_WRITE << 3));
-  if (0 != retVal) {
-    Serial.print("ERROR: Failed to configure AS7341 SMUX for writing ");
-    Serial.println(retVal);
-  }
-}
-
-// After SMUX configuration data has been sent, tell AS7341 to enable
-// new configuration.
-void as7341SMUXEnable() {
-  as7341EnableRegister |= 0b00010000;
-  as7341UpdateEnableRegister();
-}
-
-
-// Send AS7341 SMUX configuration
-void as7341SendSMUXConfig(uint8_t* SMUX_config) {
-  uint8_t retVal = twi_writeToBlocking(AS7341_I2CADDR_DEFAULT, SMUX_config, SMUX_config_size, true /* wait for completion */);
-  if (0 != retVal) {
-    Serial.print("ERROR: Failed to configure SMUX ");
-    Serial.println(retVal);
-  }
-}
-
 // Reads all channels of AS7341. Analogous to Adafruit_AS7341::readAllChannels
 void as7341ConfigureSMUXAndRead(uint8_t* SMUX_config) {
+  uint8_t retVal;
+
   if (ASYNC_ERROR == async_status) {
     // Propagate error
     as7341_read_status = AS7341_READ_ERROR;
@@ -521,10 +491,32 @@ void as7341ConfigureSMUXAndRead(uint8_t* SMUX_config) {
   switch(as7341_read_status) {
     case AS7341_READ_IDLE:
       // Disable spectral measurement then send SMUX configuration
-      as7341EnableSpectralMeasurement(false);
-      as7341SMUXWrite();
-      as7341SendSMUXConfig(SMUX_config);
-      as7341SMUXEnable();
+      as7341EnableRegister &= ~AS7341_ENABLE_SP_EN;
+      as7341UpdateEnableRegister();
+
+      // Tell AS7341 that SMUX configuration data is coming.
+      retVal = register_write_byte(AS7341_I2CADDR_DEFAULT, AS7341_CFG6, (AS7341_SMUX_CMD_WRITE << 3));
+      if (0 != retVal) {
+        Serial.print("ERROR: Failed to configure AS7341 SMUX for writing ");
+        Serial.println(retVal);
+        as7341_read_status = AS7341_READ_ERROR;
+        break;
+      }
+
+      // Send AS7341 SMUX configuration
+      retVal = twi_writeToBlocking(AS7341_I2CADDR_DEFAULT, SMUX_config, SMUX_config_size, true /* wait for completion */);
+      if (0 != retVal) {
+        Serial.print("ERROR: Failed to configure SMUX ");
+        Serial.println(retVal);
+        as7341_read_status = AS7341_READ_ERROR;
+        break;
+      }
+
+      // After SMUX configuration data has been sent, tell AS7341 to enable
+      // new configuration. This bit will be cleared when done.
+      as7341EnableRegister |= AS7341_ENABLE_SMUXEN;
+      as7341UpdateEnableRegister();
+
       as7341_read_status = AS7341_READ_SMUX;
       break;
     case AS7341_READ_SMUX:
@@ -532,10 +524,12 @@ void as7341ConfigureSMUXAndRead(uint8_t* SMUX_config) {
       async_read(AS7341_I2CADDR_DEFAULT, AS7341_ENABLE, 1);
       if (ASYNC_COMPLETE == async_status) {
         // Check ENABLE register value to see if SMUX Enable bit has been cleared.
-        if (!(async_buffer[0] & 0b00010000)) {
+        if (!(async_buffer[0] & AS7341_ENABLE_SMUXEN)) {
           // SMUX ready, update register value and start a read!
           as7341EnableRegister = async_buffer[0];
-          as7341EnableSpectralMeasurement(true);
+          as7341EnableRegister |= AS7341_ENABLE_SP_EN;
+          as7341UpdateEnableRegister();
+
           as7341_read_status = AS7341_READ_READY;
         }
         async_status = ASYNC_IDLE;
@@ -584,7 +578,7 @@ void as7341ConfigureSMUXAndRead(uint8_t* SMUX_config) {
 // as7341_color_channel_t. (Example: as7341Readings[AS7341_CHANNEL_480nm_F3] )
 // 
 // Once as7341_read_status is AS7341_SENSORS_COMPLETE, further calls will do
-// nothing waiting for the caller to complete their work. Once the caller is
+// nothing waiting for the caller to complete their work. When the caller is
 // ready to start a new read, set as7341_read_status = AS7341_SENSORS_IDLE
 void as7341ReadAllChannels() {
   if (AS7341_READ_ERROR == as7341_read_status) {
