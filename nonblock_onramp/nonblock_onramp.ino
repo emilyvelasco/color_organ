@@ -44,10 +44,6 @@ int scale4[] = {note_C4, note_D4, note_E4, note_F4, note_G4, note_A4, note_B4, n
 // Mozzi setup
 Oscil <2048, AUDIO_RATE> aSin(SIN2048_DATA);
 
-// Tracking what note we are playing and when to update
-unsigned long nextUpdate;
-uint8_t currentNote;
-
 /////////////////////////////////////////////////////////////////////////////
 // Declarations supporting utility functions calling into Mozzi twi_nonblock
 
@@ -190,7 +186,7 @@ uint8_t SMUX_F5F8_Clear_NIR[SMUX_config_size] = {
 // ASTEP is a 16-bit unsigned value. 0-65534 are valid, 65535 is reserved.
 // (ATIME + 1) * (ASTEP + 1) must not exceed 65535.
 const uint8_t ATIME=100;
-const uint16_t ASTEP=999;
+const uint16_t ASTEP=10;
 
 // State machine tracking progress through asynchrnous read operations
 static volatile uint8_t as7341_read_status;
@@ -209,7 +205,8 @@ typedef enum {
   AS7341_SENSORS_IDLE,
   AS7341_SENSORS_F1_F4,
   AS7341_SENSORS_F5_F8,
-  AS7341_SENSORS_COMPLETE
+  AS7341_SENSORS_COMPLETE,
+  AS7341_SENSORS_ERROR
 } as7341_sensor_groupings;
 
 // Mozzi twi_nonblock has its own internal memory for I2C data (twi_masterBuffer)
@@ -510,6 +507,10 @@ void as7341SendSMUXConfig(uint8_t* SMUX_config) {
 
 // Reads all channels of AS7341. Analogous to Adafruit_AS7341::readAllChannels
 void as7341ConfigureSMUXAndRead(uint8_t* SMUX_config) {
+  if (ASYNC_ERROR == async_status) {
+    // Propagate error
+    as7341_read_status = AS7341_READ_ERROR;
+  }
   switch(as7341_read_status) {
     case AS7341_READ_IDLE:
       // Disable spectral measurement then send SMUX configuration
@@ -566,6 +567,9 @@ void as7341ConfigureSMUXAndRead(uint8_t* SMUX_config) {
 
 // Reads all channels of AS7341. Analogous to Adafruit_AS7341::readAllChannels
 void as7341ReadAllChannels() {
+  if (AS7341_READ_ERROR == as7341_read_status) {
+    as7341_sensor_group = AS7341_SENSORS_ERROR;
+  }
   switch(as7341_sensor_group) {
     case AS7341_SENSORS_IDLE:
       as7341_sensor_group = AS7341_SENSORS_F1_F4;
@@ -594,6 +598,9 @@ void as7341ReadAllChannels() {
     case AS7341_SENSORS_COMPLETE:
       // Do nothing until caller resets to AS7341_SENSORS_IDLE
       break;
+    case AS7341_SENSORS_ERROR:
+      // Do nothing until caller resets to AS7341_SENSORS_IDLE
+      break;
     default:
       Serial.println("ERROR: Unexpected state in as7341_sensor_group");
       break;
@@ -609,6 +616,18 @@ void as7341PrintReadings() {
   Serial.println();
 }
 
+// Update Mozzi sine wave frequency based on which (F1-F8) is strongest
+void updateFrequency() {
+  uint8_t maxIndex = 0;
+
+  for(int i = 1; i < 8; i++) {
+    if (as7341Readings[i] > as7341Readings[maxIndex]) {
+      maxIndex = i;
+    }
+  }
+  aSin.setFreq(scale4[maxIndex]);
+}
+
 /////////////////////////////////////////////////////////////////////////////
 // Mozzi callback functions
 
@@ -622,16 +641,14 @@ void as7341PrintReadings() {
 // (*) Mozzi running STANDARD audio mode on an Arduino Nano (ATmega328P)
 // will call updateControl() roughly 64 times per second.
 void updateControl(){
-  if (millis() > nextUpdate) {
-    aSin.setFreq(scale4[currentNote++]);
-    currentNote = currentNote % 8;
-    nextUpdate = millis() + 500;
-  }
   as7341ReadAllChannels();
   if (AS7341_SENSORS_COMPLETE == as7341_sensor_group) {
-    as7341PrintReadings();
+    updateFrequency();
     // Reset to IDLE so as7341ReadAllChannels() will start a new reading
     // the next time it is called.
+    as7341_sensor_group = AS7341_SENSORS_IDLE;
+  } else if (AS7341_SENSORS_ERROR == as7341_sensor_group) {
+    // Oh no! Encountered a problem. Reset and try again.
     as7341_sensor_group = AS7341_SENSORS_IDLE;
   }
 }
@@ -662,8 +679,6 @@ void setup() {
 
   aSin.setFreq(440);
   startMozzi(CONTROL_RATE);
-  nextUpdate = millis() + 500;
-  currentNote = 0;
   Serial.println("Mozzi online");
 
   async_status = ASYNC_IDLE;
