@@ -70,11 +70,6 @@ byte blueGain;
 byte indigoGain;
 byte violetGain;
 
-//timing variables. mozzi doesn't like delay()
-int sensorTimeLast;
-int sensorTimeNow;
-
-
 // use #define for CONTROL_RATE, not a constant
 #define CONTROL_RATE 64 // Hz, powers of 2 are most reliable
 
