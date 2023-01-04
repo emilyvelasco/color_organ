@@ -70,11 +70,6 @@ byte blueGain;
 byte indigoGain;
 byte violetGain;
 
-//timing variables. mozzi doesn't like delay()
-int sensorTimeLast;
-int sensorTimeNow;
-
-
 // use #define for CONTROL_RATE, not a constant
 #define CONTROL_RATE 64 // Hz, powers of 2 are most reliable
 
@@ -94,10 +89,6 @@ void setup() {
   
   kVib.setFreq(12.5f);
   
-  sensorTimeLast = millis();
-  sensorTimeNow = millis();
-
-
   while (!Serial) {
     delay(1);
   }
@@ -115,13 +106,15 @@ void setup() {
   as7341.setATIME(100);
   as7341.setASTEP(10);
   as7341.setGain(AS7341_GAIN_256X);
+
+  // Start sensor integration.
+  as7341.startReading();
 }
 
 
 
 
 void updateControl() {
-  sensorTimeNow = millis();
 
   colorGains();
 
@@ -137,15 +130,12 @@ void updateControl() {
   indigoSin.setFreq(indigo_centre_freq+vibrato); // set the frequency
   violetSin.setFreq(violet_centre_freq+vibrato); // set the frequency
   
-  /*communicates with the sensor ten times a second
-  because I2C comms interrupts audio synthesis, this
-  is a balancing act. each communication over I2C
-  creates an audio pop. too often sounds like buzzing.
-  too infrequent means code is slow to take sensor readings*/
-  if (sensorTimeNow >= (sensorTimeLast + 100)) {
+  if (as7341.checkReadingProgress()) {
+    // Sensor integration complete, read and process sensor values.
     readSensor();
-    sensorTimeLast = millis();
 
+    // Start another round of sensor integration.
+    as7341.startReading();
   }
 
 }
@@ -176,10 +166,9 @@ AudioOutput_t updateAudio() {
 
 
 void readSensor() {
-  if (!as7341.readAllChannels()) {
-    //   Serial.println("Error reading all channels!");
-    return;
-  }
+  uint16_t readings[12];
+
+  as7341.getAllChannels(readings);
 
 
 
@@ -192,14 +181,14 @@ void readSensor() {
       current = 0;
 /*read the color channels from the sensor and write them into 
 the colorValues array for later use*/
-    colorValues[violet] = as7341.getChannel(AS7341_CHANNEL_415nm_F1);
-    colorValues[indigo] = as7341.getChannel(AS7341_CHANNEL_445nm_F2);
-    colorValues[blue] = as7341.getChannel(AS7341_CHANNEL_480nm_F3);
-    colorValues[cyan] = as7341.getChannel(AS7341_CHANNEL_515nm_F4);
-    colorValues[green] = as7341.getChannel(AS7341_CHANNEL_555nm_F5);
-    colorValues[yellow] = as7341.getChannel(AS7341_CHANNEL_590nm_F6);
-    colorValues[red] = as7341.getChannel(AS7341_CHANNEL_630nm_F7);
-    colorValues[orange] = as7341.getChannel(AS7341_CHANNEL_680nm_F8);
+    colorValues[violet] = readings[AS7341_CHANNEL_415nm_F1];
+    colorValues[indigo] = readings[AS7341_CHANNEL_445nm_F2];
+    colorValues[blue] = readings[AS7341_CHANNEL_480nm_F3];
+    colorValues[cyan] = readings[AS7341_CHANNEL_515nm_F4];
+    colorValues[green] = readings[AS7341_CHANNEL_555nm_F5];
+    colorValues[yellow] = readings[AS7341_CHANNEL_590nm_F6];
+    colorValues[red] = readings[AS7341_CHANNEL_630nm_F7];
+    colorValues[orange] = readings[AS7341_CHANNEL_680nm_F8];
 
   for (byte i = 0; i < 8; i = i + 1) {
 
